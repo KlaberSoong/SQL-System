@@ -13,7 +13,12 @@ import utils.PageType;
  *   [12,16)  slotCount（int，行数）
  *   [16,20)  nextPageId（int，链表下一页，-1 表示无）
  *   [20,24)  保留
- *   [24,...) 槽目录 + 行数据 + 空闲空间
+ *
+ * 页体布局（自页头之后，两条边界相向增长，中间为空闲空间）：
+ *   [24, freeSpaceOffset)                 行数据（自前向后追加，行间连续）
+ *   [freeSpaceOffset, 槽目录起点)          空闲空间
+ *   [PAGE_SIZE-4*slotCount, PAGE_SIZE)     槽目录（自页尾向前增长）
+ * 槽目录第 i 项（0 起）位于 [PAGE_SIZE-4*(i+1), PAGE_SIZE-4*i)，每槽 = [偏移 2B][长度 2B]。
  */
 public class Page {
     private final int pageId;
@@ -82,19 +87,82 @@ public class Page {
         return data;
     }
 
-    // ---- 行读写（槽目录 + 行数据 + 空闲空间，待实现） ----
+    // ---- 行读写（行数据自前向后 + 槽目录自后向前） ----
 
-    /** 按槽下标读取一行字节。 */
-    public byte[] readRow(int slotIndex) {
-        throw new UnsupportedOperationException("TODO: 按槽读取一行字节");
+    /**
+     * 槽目录表项长度：每个槽 = [偏移 2B][长度 2B]（均按大端无符号短整数存储）。
+     * PAGE_SIZE=4096，偏移最大 4095、行最大 4072，均可用无符号短整数（0~65535）表示。
+     */
+    private static final int SLOT_SIZE = 4;
+
+    /** 槽目录第 slotIndex 项（0 起）在页内的偏移（自页尾向前）。 */
+    private int slotOffset(int slotIndex) {
+        return Constants.PAGE_SIZE - SLOT_SIZE * (slotIndex + 1);
     }
 
-    /** 在空闲空间追加一行字节并登记槽；空间不足返回 false。 */
+    /** 判断追加一行（含其槽目录项）是否有足够空闲空间。 */
+    public boolean hasSpace(int rowLength) {
+        // 新行写在 freeSpaceOffset，新槽写在页尾更靠前处；两者不得越过彼此
+        return getFreeSpaceOffset() + rowLength
+                <= Constants.PAGE_SIZE - SLOT_SIZE * (getSlotCount() + 1);
+    }
+
+    /**
+     * 按槽下标读取一行字节。
+     *
+     * <p>槽目录第 slotIndex 项位于 {@code [PAGE_SIZE-4*(slotIndex+1), PAGE_SIZE-4*slotIndex)}，
+     * 依次为行偏移（2B）与行长（2B）。据此把对应区间的字节拷贝出来返回。
+     */
+    public byte[] readRow(int slotIndex) {
+        int off = slotOffset(slotIndex);
+        int rowOffset = getShort(off) & 0xFFFF;
+        int rowLength = getShort(off + 2) & 0xFFFF;
+        byte[] row = new byte[rowLength];
+        System.arraycopy(data, rowOffset, row, 0, rowLength);
+        return row;
+    }
+
+    /**
+     * 在空闲空间追加一行字节并登记槽；空间不足返回 false。
+     *
+     * <p>步骤：先在 {@code freeSpaceOffset} 处写入行字节，再在槽目录（页尾更靠前处）登记
+     * [偏移, 长度]，最后前移 {@code freeSpaceOffset}、递增 {@code slotCount}。
+     */
     public boolean writeRow(byte[] rowData) {
-        throw new UnsupportedOperationException("TODO: 在空闲空间追加一行，并登记槽");
+        if (!hasSpace(rowData.length)) {
+            return false;
+        }
+        int rowOffset = getFreeSpaceOffset();
+        // 1. 写入行数据（自前向后追加）
+        System.arraycopy(rowData, 0, data, rowOffset, rowData.length);
+        // 2. 在槽目录（页尾向前）登记 [偏移, 长度]
+        int off = slotOffset(getSlotCount());
+        putShort(off, rowOffset);
+        putShort(off + 2, rowData.length);
+        // 3. 前移空闲空间起始偏移、递增槽数
+        setFreeSpaceOffset(rowOffset + rowData.length);
+        setSlotCount(getSlotCount() + 1);
+        return true;
+    }
+
+    /** 清空本页所有行（仅复位槽数与空闲空间，保留页头其余字段）。 */
+    public void clear() {
+        setFreeSpaceOffset(Constants.HEADER_SIZE);
+        setSlotCount(0);
     }
 
     // ---- 内部字节读写（大端） ----
+
+    /** 读取 2 字节无符号短整数（大端），返回范围为 0~65535 的有符号 int。 */
+    private int getShort(int offset) {
+        return ((data[offset] & 0xFF) << 8) | (data[offset + 1] & 0xFF);
+    }
+
+    /** 写入 2 字节（大端），取 value 的低 16 位。 */
+    private void putShort(int offset, int value) {
+        data[offset] = (byte) (value >>> 8);
+        data[offset + 1] = (byte) value;
+    }
 
     private int getInt(int offset) {
         return ((data[offset] & 0xFF) << 24)

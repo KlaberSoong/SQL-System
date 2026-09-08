@@ -436,7 +436,8 @@ public class Parser {
      *
      * <p>映射关系：{@link ConstSubtype#INT_CONST} → {@link ColumnType#INT}；
      * {@link ConstSubtype#FLOAT_CONST} → {@link ColumnType#FLOAT}；
-     * {@link ConstSubtype#STRING_CONST} → {@link ColumnType#VARCHAR}。
+     * {@link ConstSubtype#STRING_CONST} → {@link ColumnType#VARCHAR}；
+     * {@link ConstSubtype#BOOL_CONST} → {@link ColumnType#BOOL}。
      *
      * @param t 待转换的 CONST token（其 {@code getConstValue()} 已含解析后的值）
      * @return 对应类型的 {@link Literal}
@@ -447,6 +448,8 @@ public class Parser {
                 return new Literal(t.getConstValue(), ColumnType.INT);
             case FLOAT_CONST:
                 return new Literal(t.getConstValue(), ColumnType.FLOAT);
+            case BOOL_CONST:
+                return new Literal(t.getConstValue(), ColumnType.BOOL);
             case STRING_CONST:
             default:
                 return new Literal(t.getConstValue(), ColumnType.VARCHAR);

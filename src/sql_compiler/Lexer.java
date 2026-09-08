@@ -157,13 +157,14 @@ public class Lexer {
     }
 
     /**
-     * 读取一个标识符或关键字。
+     * 读取一个标识符、关键字或布尔字面量。
      *
      * <p>标识符文法：以字母或下划线开头，后跟任意个字母 / 数字 / 下划线。读完整个词素后，
-     * 将词素转大写去 {@link #KEYWORDS} 查表：命中则产出 {@link TokenType#KEYWORD}，
+     * 先特判布尔字面量 {@code true} / {@code false}（大小写不敏感，产出 CONST，使二者成为
+     * 保留字）；否则将词素转大写去 {@link #KEYWORDS} 查表：命中则产出 {@link TokenType#KEYWORD}，
      * 否则产出 {@link TokenType#IDENTIFIER}。词素值保留源文本的原始大小写。
      *
-     * @return 新建的 Token，type 为 KEYWORD 或 IDENTIFIER，位置为词素首字符的行列
+     * @return 新建的 Token，type 为 CONST（布尔）、KEYWORD 或 IDENTIFIER，位置为词素首字符的行列
      */
     private Token readIdentifierOrKeyword() {
         int startLine = line;
@@ -173,6 +174,11 @@ public class Lexer {
             sb.append(advance());
         }
         String lexeme = sb.toString();
+        if (lexeme.equalsIgnoreCase("true") || lexeme.equalsIgnoreCase("false")) {
+            Token token = new Token(TokenType.CONST, lexeme, startLine, startCol);
+            token.setConst(ConstSubtype.BOOL_CONST, lexeme.equalsIgnoreCase("true"));
+            return token;
+        }
         TokenType type = KEYWORDS.contains(lexeme.toUpperCase()) ? TokenType.KEYWORD : TokenType.IDENTIFIER;
         return new Token(type, lexeme, startLine, startCol);
     }

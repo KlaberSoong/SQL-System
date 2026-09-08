@@ -36,7 +36,7 @@ comparison    := primary  (('='|'!='|'<'|'<='|'>'|'>=') primary)?
 primary       := IDENTIFIER | CONST | '(' expression ')'
 id_list       := IDENTIFIER (',' IDENTIFIER)*
 value_list    := CONST (',' CONST)*
-CONST         := INT_CONST | STRING_CONST
+CONST         := INT_CONST | FLOAT_CONST | STRING_CONST | BOOL_CONST
 ```
 
 > 注意：`expression` 中的比较运算符集合（含 `!=`、`<>` 等）由 `Lexer.java` 实际支持为准。
@@ -47,7 +47,7 @@ CONST         := INT_CONST | STRING_CONST
 | ---------- | --------------------------------------------- | -------------------------------------------------------------------- |
 | KEYWORD    | 关键字（大小写不敏感）                        | SELECT FROM WHERE CREATE TABLE INSERT INTO VALUES DELETE INT VARCHAR |
 | IDENTIFIER | 标识符（字母/下划线开头，后跟字母数字下划线） | student、age、user_name                                              |
-| CONST      | 常量（INT_CONST / STRING_CONST）              | 20、'Alice'                                                          |
+| CONST      | 常量（INT_CONST / FLOAT_CONST / STRING_CONST / BOOL_CONST） | 20、3.14、'Alice'、true                                             |
 | OPERATOR   | 运算符（多字符优先匹配）                      | = != < <= > >= + - * /                                               |
 | DELIMITER  | 分隔符                                        | ( ) , ;                                                              |
 
