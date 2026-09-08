@@ -1,0 +1,20 @@
+# 编译产物
+out/
+*.class
+sources.txt
+
+# 运行时生成的数据库文件
+data/
+*.dat
+pg_catalog
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+
+# 系统文件
+Thumbs.db
+.DS_Store
