@@ -29,7 +29,7 @@ public final class Serializer {
                 out.writeInt((Integer) value);
                 break;
             case FLOAT:
-                out.writeFloat((Float) value);
+                out.writeFloat(((Number) value).floatValue());
                 break;
             case BOOL:
                 out.writeBoolean((Boolean) value);

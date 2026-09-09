@@ -109,6 +109,10 @@ public class Main {
             }
         } catch (DbException e) {
             out.append(e.getMessage());
+        } catch (RuntimeException e) {
+            // 兜底：非 DbException 的运行时异常（如类型转换失败）也要显示出来，
+            // 避免在 javaw 无控制台的 GUI 下静默无响应。
+            out.append("[internal error] ").append(e.toString());
         }
         return out.toString();
     }

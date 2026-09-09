@@ -131,7 +131,12 @@ public class Executor {
             values.add(ExpressionEvaluator.eval(v, Collections.emptyMap(), Collections.emptyList()));
         }
         if (plan.getColumns() == null) {
-            return values; // 按建表顺序的全列值
+            // 按建表顺序取全列；值需按目标列类型转换（如 INT 字面量写入 FLOAT 列时拓宽为 Float）
+            List<Object> coerced = new ArrayList<>(values.size());
+            for (int i = 0; i < values.size(); i++) {
+                coerced.add(coerce(values.get(i), schema.get(i).getType()));
+            }
+            return coerced;
         }
         if (plan.getColumns().size() != values.size()) {
             throw new DbException("INSERT column/value count mismatch");
@@ -147,9 +152,23 @@ public class Executor {
                 throw new DbException("column '" + plan.getColumns().get(i)
                         + "' not found in table '" + table + "'");
             }
-            full[j] = values.get(i);
+            full[j] = coerce(values.get(i), schema.get(j).getType());
         }
         return Arrays.asList(full);
+    }
+
+    /** 值类型 -> 列类型 的运行时转换（语义分析已保证兼容，这里补齐 INT -> FLOAT 拓宽）。 */
+    private static Object coerce(Object value, ColumnType target) {
+        if (value == null) {
+            return value;
+        }
+        if (target == ColumnType.FLOAT && value instanceof Number) {
+            return ((Number) value).floatValue();
+        }
+        if (target == ColumnType.INT && value instanceof Number) {
+            return ((Number) value).intValue();
+        }
+        return value;
     }
 
     private static Object defaultValue(ColumnType t) {
