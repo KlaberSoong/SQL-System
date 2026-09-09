@@ -38,6 +38,9 @@ public class CmdWindow {
     private final List<String> history = new ArrayList<>();
     private int historyPos = -1;
 
+    /** 尚未闭合（括号/引号未配对）的多行 SQL 缓冲。 */
+    private final StringBuilder pending = new StringBuilder();
+
     private static final Color BG = Color.BLACK;
     private static final Color FG = new Color(0x3f, 0xf2, 0x3f); // 经典终端绿
     private static final Color FG_INPUT = new Color(0xf0, 0xf0, 0xf0);
@@ -111,26 +114,73 @@ public class CmdWindow {
         input.requestFocusInWindow();
     }
 
-    /** 回车提交一条命令。 */
+    /** 回车提交一条命令；若语句未闭合（括号/引号未配对）则只追加缓冲，等待下一行。 */
     private void onSubmit() {
         String line = input.getText().trim();
         input.setText("");
         if (line.isEmpty()) {
+            // 空行取消尚未完成的多行语句，避免一直卡在续行状态。
+            if (pending.length() > 0) {
+                pending.setLength(0);
+                appendLine("  ...> (已取消)");
+            }
             return;
         }
-        history.add(line);
-        historyPos = history.size();
-        appendLine("MiniDB> " + line);
 
         if ("quit".equalsIgnoreCase(line) || "exit".equalsIgnoreCase(line)) {
+            appendLine("MiniDB> " + line);
             appendLine("Bye.");
             frame.dispose();
             System.exit(0);
             return;
         }
 
-        appendLine(Main.executeAndFormat(line, storage, catalogManager, catalog));
+        if (pending.length() == 0) {
+            appendLine("MiniDB> " + line);
+        } else {
+            appendLine("  ...> " + line);
+        }
+        pending.append(line).append(' ');
+
+        // 语句尚未闭合则继续等待后续行，不提交。
+        if (!isComplete(pending.toString())) {
+            return;
+        }
+
+        String sql = pending.toString().trim();
+        pending.setLength(0);
+        history.add(sql);
+        historyPos = history.size();
+        appendLine(Main.executeAndFormat(sql, storage, catalogManager, catalog));
         appendLine("");
+    }
+
+    /** 语句是否已闭合：括号配对且当前不在字符串字面量内部。 */
+    private boolean isComplete(String sql) {
+        int depth = 0;
+        boolean inString = false;
+        char quote = 0;
+        for (int i = 0; i < sql.length(); i++) {
+            char c = sql.charAt(i);
+            if (inString) {
+                if (c == quote) {
+                    inString = false;
+                }
+                continue;
+            }
+            if (c == '\'' || c == '"') {
+                inString = true;
+                quote = c;
+            } else if (c == '(') {
+                depth++;
+            } else if (c == ')') {
+                depth--;
+                if (depth < 0) {
+                    return false;
+                }
+            }
+        }
+        return depth == 0 && !inString;
     }
 
     /** 按上下方向键从历史中回显命令（delta 为 -1 向上、1 向下）。 */
