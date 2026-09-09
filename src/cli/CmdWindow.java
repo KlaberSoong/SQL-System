@@ -107,10 +107,6 @@ public class CmdWindow {
         frame.add(scroll, BorderLayout.CENTER);
         frame.add(inputPanel, BorderLayout.SOUTH);
 
-        appendLine("MiniDB (Java) — cmd 风格界面");
-        appendLine("输入 SQL 语句后回车执行；输入 quit / exit 退出；↑↓ 翻历史命令。");
-        appendLine("");
-
         frame.setVisible(true);
         input.requestFocusInWindow();
     }
