@@ -6,12 +6,12 @@ import sql_compiler.Catalog;
 
 import javax.swing.BorderFactory;
 import javax.swing.JFrame;
-import javax.swing.JLabel;
-import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
-import javax.swing.JTextField;
-import javax.swing.border.EmptyBorder;
+import javax.swing.text.AbstractDocument;
+import javax.swing.text.AttributeSet;
+import javax.swing.text.BadLocationException;
+import javax.swing.text.DocumentFilter;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Font;
@@ -21,9 +21,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * cmd 风格图形界面：黑底、等宽字体、绿色文字与 {@code MiniDB>} 提示符，整体观感类似
- * Windows 命令提示符。上方为只读的滚动输出区，下方为单行输入框（支持上下方向键翻命令
- * 历史）。输入 {@code quit} / {@code exit} 或直接关闭窗口退出。
+ * cmd 风格图形界面：黑底、等宽字体、绿色文字，整体观感类似 Windows 命令提示符。
+ * 用单一可编辑文本区模拟终端——提示符 {@code MiniDB>}、用户输入与执行结果在同一片区域
+ * 交错显示：回车后结果紧接输入行下方，空一行后再出现新的 {@code MiniDB>} 提示符。
+ * 支持上下方向键翻命令历史；多行 SQL（括号/引号未闭合）以 {@code ...>} 续行。
  */
 public class CmdWindow {
     private final StorageEngine storage;
@@ -31,8 +32,10 @@ public class CmdWindow {
     private final Catalog catalog;
 
     private JFrame frame;
-    private JTextArea output;
-    private JTextField input;
+    private JTextArea terminal;
+
+    /** 当前可编辑行（提示符之后）的起始位置；其左侧为只读保护区。 */
+    private int promptPos = 0;
 
     /** 命令历史与当前浏览位置（用于上下方向键回显历史命令）。 */
     private final List<String> history = new ArrayList<>();
@@ -41,13 +44,14 @@ public class CmdWindow {
     /** 尚未闭合（括号/引号未配对）的多行 SQL 缓冲。 */
     private final StringBuilder pending = new StringBuilder();
 
+    private static final String PROMPT = "MiniDB> ";
+    private static final String CONTINUE_PROMPT = "  ...> ";
+
     private static final Color BG = Color.BLACK;
-    private static final Color FG = new Color(0x3f, 0xf2, 0x3f); // 经典终端绿
-    private static final Color FG_INPUT = new Color(0xf0, 0xf0, 0xf0);
+    private static final Color FG = Color.WHITE;
     // 用逻辑字体 "Monospaced"（而非物理字体 "Consolas"）：物理字体缺少 CJK 字形时不会回退，
     // 中文会显示成乱码/方框；逻辑字体会在 Windows 上自动回退（拉丁用 Consolas，中文用宋体）。
     private static final Font MONO = new Font(Font.MONOSPACED, Font.PLAIN, 14);
-    private static final Font MONO_BOLD = new Font(Font.MONOSPACED, Font.BOLD, 14);
 
     public CmdWindow(StorageEngine storage, CatalogManager catalogManager, Catalog catalog) {
         this.storage = storage;
@@ -62,88 +66,118 @@ public class CmdWindow {
         frame.setSize(780, 520);
         frame.setLocationRelativeTo(null);
 
-        output = new JTextArea();
-        output.setEditable(false);
-        output.setBackground(BG);
-        output.setForeground(FG);
-        output.setFont(MONO);
-        output.setCaretColor(FG);
-        output.setLineWrap(false);
+        terminal = new JTextArea();
+        terminal.setBackground(BG);
+        terminal.setForeground(FG);
+        terminal.setCaretColor(FG);
+        terminal.setFont(MONO);
+        terminal.setLineWrap(false);
+        terminal.setText(PROMPT);
+        promptPos = terminal.getDocument().getLength();
 
-        JScrollPane scroll = new JScrollPane(output);
-        scroll.setBorder(BorderFactory.createEmptyBorder());
-        scroll.getViewport().setBackground(BG);
-
-        JLabel prompt = new JLabel("MiniDB> ");
-        prompt.setForeground(FG);
-        prompt.setBackground(BG);
-        prompt.setOpaque(true);
-        prompt.setFont(MONO_BOLD);
-
-        input = new JTextField();
-        input.setBackground(BG);
-        input.setForeground(FG_INPUT);
-        input.setCaretColor(FG_INPUT);
-        input.setFont(MONO);
-        input.setBorder(BorderFactory.createEmptyBorder());
-        input.addActionListener(e -> onSubmit());
-        input.addKeyListener(new KeyAdapter() {
+        // 保护提示符及其上方的历史输出：任何插入/删除/替换都不得越过 promptPos。
+        ((AbstractDocument) terminal.getDocument()).setDocumentFilter(new DocumentFilter() {
             @Override
-            public void keyPressed(KeyEvent e) {
-                if (e.getKeyCode() == KeyEvent.VK_UP) {
-                    recall(-1);
-                    e.consume();
-                } else if (e.getKeyCode() == KeyEvent.VK_DOWN) {
-                    recall(1);
-                    e.consume();
+            public void insertString(FilterBypass fb, int offset, String string, AttributeSet attr)
+                    throws BadLocationException {
+                if (offset >= promptPos) {
+                    super.insertString(fb, offset, string, attr);
+                }
+            }
+
+            @Override
+            public void remove(FilterBypass fb, int offset, int length) throws BadLocationException {
+                if (offset >= promptPos) {
+                    super.remove(fb, offset, length);
+                }
+            }
+
+            @Override
+            public void replace(FilterBypass fb, int offset, int length, String text, AttributeSet attrs)
+                    throws BadLocationException {
+                if (offset >= promptPos) {
+                    super.replace(fb, offset, length, text, attrs);
                 }
             }
         });
 
-        JPanel inputPanel = new JPanel(new BorderLayout());
-        inputPanel.setBackground(BG);
-        inputPanel.setBorder(new EmptyBorder(4, 6, 6, 6));
-        inputPanel.add(prompt, BorderLayout.WEST);
-        inputPanel.add(input, BorderLayout.CENTER);
+        // 光标不得落到保护区内（例如用鼠标点历史输出时弹回提示符后）。
+        terminal.addCaretListener(e -> {
+            if (e.getDot() < promptPos) {
+                terminal.setCaretPosition(promptPos);
+            }
+        });
+
+        terminal.addKeyListener(new KeyAdapter() {
+            @Override
+            public void keyPressed(KeyEvent e) {
+                int code = e.getKeyCode();
+                if (code == KeyEvent.VK_ENTER) {
+                    e.consume();
+                    submitCurrentLine();
+                } else if (code == KeyEvent.VK_UP) {
+                    e.consume();
+                    recallHistory(-1);
+                } else if (code == KeyEvent.VK_DOWN) {
+                    e.consume();
+                    recallHistory(1);
+                } else if (code == KeyEvent.VK_BACK_SPACE) {
+                    if (terminal.getCaretPosition() <= promptPos || terminal.getSelectionStart() < promptPos) {
+                        e.consume();
+                    }
+                } else if (code == KeyEvent.VK_DELETE) {
+                    if (terminal.getSelectionStart() < promptPos) {
+                        e.consume();
+                    }
+                } else if (code == KeyEvent.VK_LEFT) {
+                    if (terminal.getCaretPosition() <= promptPos) {
+                        e.consume();
+                    }
+                } else if (code == KeyEvent.VK_HOME) {
+                    e.consume();
+                    terminal.setCaretPosition(promptPos);
+                }
+            }
+        });
+
+        JScrollPane scroll = new JScrollPane(terminal);
+        scroll.setBorder(BorderFactory.createEmptyBorder());
+        scroll.getViewport().setBackground(BG);
 
         frame.setLayout(new BorderLayout());
         frame.add(scroll, BorderLayout.CENTER);
-        frame.add(inputPanel, BorderLayout.SOUTH);
 
         frame.setVisible(true);
-        input.requestFocusInWindow();
+        terminal.requestFocusInWindow();
+        terminal.setCaretPosition(promptPos);
     }
 
-    /** 回车提交一条命令；若语句未闭合（括号/引号未配对）则只追加缓冲，等待下一行。 */
-    private void onSubmit() {
-        String line = input.getText().trim();
-        input.setText("");
+    /** 回车提交当前行；结果紧接输入行下方，空一行后再出现新提示符。 */
+    private void submitCurrentLine() {
+        String line = terminal.getText().substring(promptPos).trim();
+
         if (line.isEmpty()) {
             // 空行取消尚未完成的多行语句，避免一直卡在续行状态。
             if (pending.length() > 0) {
                 pending.setLength(0);
-                appendLine("  ...> (已取消)");
+                terminal.append("\n" + CONTINUE_PROMPT + "(已取消)");
             }
+            appendNewPrompt();
             return;
         }
 
-        if ("quit".equalsIgnoreCase(line) || "exit".equalsIgnoreCase(line)) {
-            appendLine("MiniDB> " + line);
-            appendLine("Bye.");
+        if (pending.length() == 0 && ("quit".equalsIgnoreCase(line) || "exit".equalsIgnoreCase(line))) {
+            terminal.append("\nBye.\n");
             frame.dispose();
             System.exit(0);
             return;
         }
 
-        if (pending.length() == 0) {
-            appendLine("MiniDB> " + line);
-        } else {
-            appendLine("  ...> " + line);
-        }
         pending.append(line).append(' ');
 
         // 语句尚未闭合则继续等待后续行，不提交。
         if (!isComplete(pending.toString())) {
+            appendContinuationPrompt();
             return;
         }
 
@@ -151,8 +185,26 @@ public class CmdWindow {
         pending.setLength(0);
         history.add(sql);
         historyPos = history.size();
-        appendLine(Main.executeAndFormat(sql, storage, catalogManager, catalog));
-        appendLine("");
+
+        // 结果紧接输入行下方，随后空一行，再输出新提示符。
+        String result = Main.executeAndFormat(sql, storage, catalogManager, catalog);
+        terminal.append("\n" + result);
+        terminal.append("\n\n");
+        appendNewPrompt();
+    }
+
+    /** 在末尾追加新提示符，并把可编辑位置推进到提示符之后。 */
+    private void appendNewPrompt() {
+        terminal.append(PROMPT);
+        promptPos = terminal.getDocument().getLength();
+        terminal.setCaretPosition(promptPos);
+    }
+
+    /** 多行语句续行：换行后追加续行提示符 {@code ...>}。 */
+    private void appendContinuationPrompt() {
+        terminal.append("\n" + CONTINUE_PROMPT);
+        promptPos = terminal.getDocument().getLength();
+        terminal.setCaretPosition(promptPos);
     }
 
     /** 语句是否已闭合：括号配对且当前不在字符串字面量内部。 */
@@ -184,7 +236,7 @@ public class CmdWindow {
     }
 
     /** 按上下方向键从历史中回显命令（delta 为 -1 向上、1 向下）。 */
-    private void recall(int delta) {
+    private void recallHistory(int delta) {
         if (history.isEmpty()) {
             return;
         }
@@ -194,17 +246,16 @@ public class CmdWindow {
         }
         if (historyPos >= history.size()) {
             historyPos = history.size();
-            input.setText("");
+            replaceInput("");
             return;
         }
-        input.setText(history.get(historyPos));
-        input.setCaretPosition(input.getText().length());
+        replaceInput(history.get(historyPos));
     }
 
-    /** 向输出区追加一行并滚动到底部。 */
-    private void appendLine(String s) {
-        output.append(s);
-        output.append("\n");
-        output.setCaretPosition(output.getDocument().getLength());
+    /** 用 {@code text} 替换当前可编辑行（提示符之后到末尾的内容）。 */
+    private void replaceInput(String text) {
+        int len = terminal.getDocument().getLength();
+        terminal.replaceRange(text, promptPos, len);
+        terminal.setCaretPosition(terminal.getDocument().getLength());
     }
 }

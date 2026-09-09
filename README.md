@@ -32,7 +32,7 @@ database_system/
 ```bat
 build.bat      :: 编译全部源码到 out\
 test.bat       :: 运行接口契约冒烟测试 SmokeTest
-run.bat        :: 启动命令行 REPL（当前为框架占位）
+run.vbs        :: 双击启动 cmd 风格图形窗口（无黑色控制台）
 ```
 
 **命令行（跨平台）**
