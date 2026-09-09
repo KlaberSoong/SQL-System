@@ -34,6 +34,15 @@ public class EndToEndTest {
             a.checkContains(sel, "'Alice'", "查询返回 Alice");
             a.checkNotContains(sel, "'Bob'", "查询不含 Bob");
 
+            // 验收示例：常量折叠 + 布尔化简后仍返回正确结果
+            a.checkContains(run(storage, cm, catalog, "SELECT name FROM student WHERE 1=1 AND age > 10 + 8;"),
+                    "'Alice'", "验收示例 1=1 AND age>10+8 返回 Alice");
+
+            // 投影算术：SELECT id*2 计算列（INT*INT 结果应为整数 2，非浮点 2.0）
+            String proj = run(storage, cm, catalog, "SELECT id*2 FROM student WHERE age > 18;");
+            a.checkContains(proj, "\n2\n", "投影算术 id*2 返回整数 2");
+            a.checkNotContains(proj, "2.0", "INT*INT 不返回浮点 2.0");
+
             a.checkContains(run(storage, cm, catalog, "DELETE FROM student WHERE id = 1;"), "DELETE 1", "删除 id=1");
 
             String all = run(storage, cm, catalog, "SELECT * FROM student;");

@@ -73,6 +73,50 @@ public class ParserTest {
         BinaryExpr and = (BinaryExpr) or.getRight();
         a.checkEquals(Operator.AND, and.getOp(), "AND 在 OR 下方");
 
+        // —— 算术表达式：age > 10 + 8 ——
+        SelectStmt arith = (SelectStmt) parse("SELECT * FROM t WHERE age > 10 + 8;").get(0);
+        Comparison acmp = (Comparison) arith.getWhere();
+        a.checkEquals(Operator.GT, acmp.getOp(), "算术比较运算符");
+        a.checkEquals(true, acmp.getRight() instanceof BinaryExpr, "比较右端为算术表达式");
+        BinaryExpr add = (BinaryExpr) acmp.getRight();
+        a.checkEquals(Operator.PLUS, add.getOp(), "算术为加法");
+        a.checkEquals(10, ((Literal) add.getLeft()).getValue(), "加法左值");
+        a.checkEquals(8, ((Literal) add.getRight()).getValue(), "加法右值");
+
+        // —— 算术优先级：乘法高于加法（1 + 2 * 3 -> 1 + (2*3)） ——
+        SelectStmt prec2 = (SelectStmt) parse("SELECT * FROM t WHERE x = 1 + 2 * 3;").get(0);
+        BinaryExpr outer = (BinaryExpr) ((Comparison) prec2.getWhere()).getRight();
+        a.checkEquals(Operator.PLUS, outer.getOp(), "1+2*3 外层为加法");
+        a.checkEquals(true, outer.getRight() instanceof BinaryExpr, "乘法在加法下方");
+        a.checkEquals(Operator.MUL, ((BinaryExpr) outer.getRight()).getOp(), "乘法运算符");
+
+        // —— 括号改变结合顺序：(1 + 2) * 3 ——
+        SelectStmt paren = (SelectStmt) parse("SELECT * FROM t WHERE x = (1 + 2) * 3;").get(0);
+        BinaryExpr p = (BinaryExpr) ((Comparison) paren.getWhere()).getRight();
+        a.checkEquals(Operator.MUL, p.getOp(), "括号后外层为乘法");
+        a.checkEquals(true, p.getLeft() instanceof BinaryExpr, "括号内加法为乘法左端");
+
+        // —— 除法解析（结果类型由语义阶段按 FLOAT 处理） ——
+        SelectStmt div = (SelectStmt) parse("SELECT * FROM t WHERE a = 8 / 2;").get(0);
+        a.checkEquals(true, ((Comparison) div.getWhere()).getRight() instanceof BinaryExpr, "除法解析为算术");
+
+        // —— 投影算术：SELECT 列表可为完整表达式 ——
+        SelectStmt projArith = (SelectStmt) parse("SELECT id * 2, name FROM student;").get(0);
+        a.checkEquals(2, projArith.getSelectItems().size(), "投影算术 + 普通列共 2 项");
+        a.checkEquals(true, projArith.getSelectItems().get(0) instanceof BinaryExpr, "投影首项为算术表达式");
+        BinaryExpr pm = (BinaryExpr) projArith.getSelectItems().get(0);
+        a.checkEquals(Operator.MUL, pm.getOp(), "投影算术为乘法");
+        a.checkEquals(true, pm.getLeft() instanceof ColumnRef, "投影乘法左端为列");
+        a.checkEquals("id", ((ColumnRef) pm.getLeft()).getColumn(), "投影乘法左列 id");
+        a.checkEquals(true, projArith.getSelectItems().get(1) instanceof ColumnRef, "投影第二项为普通列");
+
+        // —— 投影算术优先级：id * 2 + 1 -> (id * 2) + 1 ——
+        SelectStmt projPrec = (SelectStmt) parse("SELECT id * 2 + 1 FROM student;").get(0);
+        BinaryExpr pp = (BinaryExpr) projPrec.getSelectItems().get(0);
+        a.checkEquals(Operator.PLUS, pp.getOp(), "id*2+1 外层为加法");
+        a.checkEquals(true, pp.getLeft() instanceof BinaryExpr, "乘法在加法下方");
+        a.checkEquals(Operator.MUL, ((BinaryExpr) pp.getLeft()).getOp(), "下层为乘法");
+
         // —— NOT 绑定 ——
         SelectStmt not = (SelectStmt) parse("SELECT * FROM t WHERE NOT a = 1;").get(0);
         UnaryExpr un = (UnaryExpr) not.getWhere();

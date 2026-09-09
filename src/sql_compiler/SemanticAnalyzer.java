@@ -158,16 +158,14 @@ public class SemanticAnalyzer {
         String table = stmt.getTable();
         requireTable(table);
 
-        // 1. 投影列存在性：Star 表示全列无需检查；ColumnRef 需完成名字绑定
+        // 1. 投影项检查：Star 表示全列无需检查；其余（列引用 / 常量 / 算术 / 比较 / 逻辑）
+        //    走统一的类型推导，内部完成列名绑定与类型检查
         for (Expr item : stmt.getSelectItems()) {
-            if (item instanceof ColumnRef) {
-                inferType(item, table); // 内部完成列存在性检查与名字绑定
-            } else if (item instanceof Star) {
+            if (item instanceof Star) {
                 // SELECT *：合法，无需检查
-            } else {
-                // grammar 中 select_list 只允许 * 与 column_ref，走到这里说明前端有误
-                fail("SemanticError", "unexpected select item: " + item);
+                continue;
             }
+            inferType(item, table);
         }
 
         // 2. WHERE 条件：最终类型必须是 BOOL

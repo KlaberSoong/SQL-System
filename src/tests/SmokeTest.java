@@ -35,7 +35,7 @@ public class SmokeTest {
 
         // 3. 计划树构造（Project -> Filter -> SeqScan）
         ProjectPlan plan = new ProjectPlan(
-                Arrays.asList("id", "name"),
+                Arrays.asList(new ColumnRef(null, "id"), new ColumnRef(null, "name")),
                 new FilterPlan(sel.getWhere(), new SeqScanPlan("student")));
         System.out.println("Plan:\n" + plan.toTree());
 

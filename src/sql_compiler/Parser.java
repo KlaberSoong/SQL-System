@@ -32,11 +32,13 @@ import java.util.List;
  *
  * <p>优先级（低 -&gt; 高）：
  * <pre>
- *   parseOr           OR
- *   parseAnd          AND
- *   parseNot          NOT
- *   parseComparison   =  !=  &lt;&gt;  &lt;  &lt;=  &gt;  &gt;=
- *   parsePrimary      列引用 / 常量 / 括号表达式
+ *   parseOr              OR
+ *   parseAnd             AND
+ *   parseNot             NOT
+ *   parseComparison      =  !=  &lt;&gt;  &lt;  &lt;=  &gt;  &gt;=
+ *   parseAdditive        +  -
+ *   parseMultiplicative  *  /
+ *   parsePrimary         列引用 / 常量 / 括号表达式
  * </pre>
  *
  * <p>契约：AST 节点（{@code ast/*}）与异常 {@link SyntaxError} 均为固定接口，本类只负责
@@ -223,8 +225,9 @@ public class Parser {
     /**
      * 解析查询语句：SELECT select_list FROM identifier where_clause?。
      *
-     * <p>select_list := '*' | column_ref (',' column_ref)*。遇 {@code *} 产出单个 {@link Star}；
-     * 否则逐个解析 {@link #parseColumnRef()}（元素可为 ColumnRef 或 Star）。
+     * <p>select_list := '*' | expression (',' expression)*。遇 {@code *} 产出单个 {@link Star}
+     * （表示投影全部列）；否则逐个解析完整表达式 {@link #parseOr()}——列引用、常量、算术、
+     * 比较、逻辑均允许（如 {@code SELECT id*2, name}）。
      *
      * @return {@link SelectStmt}，携带投影项列表、表名与可空的 WHERE 表达式
      * @throws SyntaxError 缺少关键字 / 投影项 / FROM / 表名时抛出
@@ -236,9 +239,9 @@ public class Parser {
             advance();
             items.add(new Star());
         } else {
-            items.add(parseColumnRef());
+            items.add(parseOr());
             while (matchDelimiter(",")) {
-                items.add(parseColumnRef());
+                items.add(parseOr());
             }
         }
         expectKeyword("FROM");
@@ -336,16 +339,17 @@ public class Parser {
     }
 
     /**
-     * 解析比较表达式：comparison := primary (比较运算符 primary)?。
+     * 解析比较表达式：comparison := additive (比较运算符 additive)?。
      *
      * <p>比较运算符集合：{@code = != <> < <= > >=}，其中 {@code !=} 与 {@code <>} 均映射为
      * {@link Operator#NE}。命中则构造 {@link Comparison}(op, l, r)，左右两侧均按
-     * {@link #parsePrimary()} 解析；无运算符时原样返回左侧 primary（列引用或常量）。
+     * {@link #parseAdditive()} 解析（算术表达式的优先级高于比较）；无运算符时原样返回
+     * 左侧 additive（列引用 / 常量 / 算术表达式）。
      *
-     * @return 解析得到的表达式（{@link Comparison} 或单个 primary）
+     * @return 解析得到的表达式（{@link Comparison} 或单个 additive）
      */
     private Expr parseComparison() {
-        Expr left = parsePrimary();
+        Expr left = parseAdditive();
         Operator op = null;
         if (checkOperator("=")) {
             op = Operator.EQ;
@@ -364,7 +368,59 @@ public class Parser {
         }
         if (op != null) {
             advance();
-            return new Comparison(op, left, parsePrimary());
+            return new Comparison(op, left, parseAdditive());
+        }
+        return left;
+    }
+
+    /**
+     * 解析加减表达式：additive := multiplicative (('+'|'-') multiplicative)*。
+     *
+     * <p>左结合，循环累积：每遇一个 {@code +} 或 {@code -}，把左表达式与右侧
+     * {@link #parseMultiplicative()} 合成为新的 {@link BinaryExpr}(PLUS/MINUS, l, r)。
+     * 优先级低于乘法、高于比较，因此 {@code age > 10 + 8} 中 {@code 10 + 8} 先结合。
+     *
+     * @return 解析得到的表达式；无 + / - 时原样返回左侧 multiplicative
+     */
+    private Expr parseAdditive() {
+        Expr left = parseMultiplicative();
+        while (true) {
+            Operator op;
+            if (checkOperator("+")) {
+                op = Operator.PLUS;
+            } else if (checkOperator("-")) {
+                op = Operator.MINUS;
+            } else {
+                break;
+            }
+            advance();
+            left = new BinaryExpr(op, left, parseMultiplicative());
+        }
+        return left;
+    }
+
+    /**
+     * 解析乘除表达式：multiplicative := primary (('*'|'/') primary)*。
+     *
+     * <p>左结合，循环累积：每遇一个 {@code *} 或 {@code /}，把左表达式与右侧
+     * {@link #parsePrimary()} 合成为新的 {@link BinaryExpr}(MUL/DIV, l, r)。
+     * 优先级高于加减，因此 {@code 1 + 2 * 3} 中 {@code 2 * 3} 先结合。
+     *
+     * @return 解析得到的表达式；无 * / 时原样返回左侧 primary
+     */
+    private Expr parseMultiplicative() {
+        Expr left = parsePrimary();
+        while (true) {
+            Operator op;
+            if (checkOperator("*")) {
+                op = Operator.MUL;
+            } else if (checkOperator("/")) {
+                op = Operator.DIV;
+            } else {
+                break;
+            }
+            advance();
+            left = new BinaryExpr(op, left, parsePrimary());
         }
         return left;
     }

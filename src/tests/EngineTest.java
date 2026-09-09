@@ -5,6 +5,7 @@ import engine.Executor;
 import engine.QueryResult;
 import engine.StorageEngine;
 import sql_compiler.Catalog;
+import sql_compiler.ast.BinaryExpr;
 import sql_compiler.ast.ColumnRef;
 import sql_compiler.ast.Comparison;
 import sql_compiler.ast.Literal;
@@ -81,13 +82,27 @@ public class EngineTest {
             a.checkEquals(2, qr.getRows().size(), "SeqScan 行数");
 
             // Project -> Filter -> SeqScan
-            PlanNode plan = new ProjectPlan(Arrays.asList("id", "name"),
+            PlanNode plan = new ProjectPlan(Arrays.asList(new ColumnRef(null, "id"), new ColumnRef(null, "name")),
                     new FilterPlan(new Comparison(Operator.GT, new ColumnRef(null, "age"), new Literal(18, ColumnType.INT)),
                             new SeqScanPlan("t2")));
             QueryResult pr = (QueryResult) exec.execute(plan);
             a.checkEquals(Arrays.asList("id", "name"), pr.getColumns(), "Project 列名");
             a.checkEquals(1, pr.getRows().size(), "Filter 行数");
             a.checkEquals(Arrays.asList(1, "Alice"), pr.getRows().get(0), "Filter 结果");
+
+            // 投影算术：INT*INT 返回 Integer，INT/INT 返回 Float
+            PlanNode arith = new ProjectPlan(Arrays.asList(
+                    new BinaryExpr(Operator.MUL, new ColumnRef(null, "id"), new Literal(2, ColumnType.INT))),
+                    new SeqScanPlan("t2"));
+            QueryResult ar = (QueryResult) exec.execute(arith);
+            a.checkEquals(2, ar.getRows().size(), "投影算术行数");
+            a.checkEquals(true, ar.getRows().get(0).get(0) instanceof Integer, "INT*INT 结果为 Integer");
+            a.checkEquals(2, ((Number) ar.getRows().get(0).get(0)).intValue(), "id=1 -> id*2 = 2");
+            PlanNode divPlan = new ProjectPlan(Arrays.asList(
+                    new BinaryExpr(Operator.DIV, new ColumnRef(null, "id"), new Literal(2, ColumnType.INT))),
+                    new SeqScanPlan("t2"));
+            QueryResult dr = (QueryResult) exec.execute(divPlan);
+            a.checkEquals(true, dr.getRows().get(0).get(0) instanceof Float, "INT/INT 结果为 Float");
 
             // Delete 算子
             a.checkEquals("DELETE 1", String.valueOf(exec.execute(new DeletePlan("t2",

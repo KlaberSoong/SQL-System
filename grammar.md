@@ -8,7 +8,7 @@
 statement     -> create_stmt | insert_stmt | select_stmt | delete_stmt ;
 
 select_stmt   -> SELECT select_list FROM IDENTIFIER where_opt ';' ;
-select_list   -> '*' | IDENTIFIER (',' IDENTIFIER) ;
+select_list   -> '*' | expression (',' expression) ;
 where_opt     -> WHERE expression | ε ;
 
 delete_stmt   -> DELETE FROM IDENTIFIER where_opt ';' ;
@@ -32,7 +32,9 @@ insert_stmt   -> INSERT INTO IDENTIFIER '(' id_list ')'
 
 ```
 expression    := comparison
-comparison    := primary  (('='|'!='|'<'|'<='|'>'|'>=') primary)?
+comparison    := additive  (('='|'!='|'<'|'<='|'>'|'>=') additive)?
+additive      := multiplicative (('+'|'-') multiplicative)*
+multiplicative := primary (('*'|'/') primary)*
 primary       := IDENTIFIER | CONST | '(' expression ')'
 id_list       := IDENTIFIER (',' IDENTIFIER)*
 value_list    := CONST (',' CONST)*

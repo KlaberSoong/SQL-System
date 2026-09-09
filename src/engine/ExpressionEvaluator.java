@@ -19,7 +19,7 @@ import java.util.Map;
  *
  * <p>求值上下文为「列名 -> 列下标」映射 + 一行值列表（单表查询，列引用按列名解析，
  * 忽略可能存在的表前缀）。支持字面量、列引用、比较、逻辑（AND/OR/NOT）与算术（+ - * /）。
- * 算术分支主要为完整性保留（当前 Parser 未解析算术，但程序化构造的计划仍可到达）。
+ * 算术分支用于 WHERE/DELETE 条件中的算术比较（如 {@code age + 1 > 20}，非常量算术）。
  */
 public final class ExpressionEvaluator {
     private ExpressionEvaluator() {
@@ -125,6 +125,9 @@ public final class ExpressionEvaluator {
             case DIV:   result = a / b; break;
             default: throw new DbException("not an arithmetic operator: " + op);
         }
-        return isFloat ? (float) result : (int) result;
+        if (isFloat) {
+            return (float) result;
+        }
+        return (int) result;
     }
 }

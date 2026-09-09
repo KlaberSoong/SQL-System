@@ -100,6 +100,13 @@ public class Optimizer {
             if (folded != old) {
                 return new InsertPlan(ip.getTable(), ip.getColumns(), folded);
             }
+        } else if (r instanceof ProjectPlan) {
+            ProjectPlan p = (ProjectPlan) r;
+            List<Expr> old = p.getExpressions();
+            List<Expr> folded = foldExprList(old);
+            if (folded != old) {
+                return new ProjectPlan(folded, onlyChild(p));
+            }
         }
         return r;
     }
@@ -196,6 +203,13 @@ public class Optimizer {
             List<Expr> s = simplifyExprList(old);
             if (s != old) {
                 return new InsertPlan(ip.getTable(), ip.getColumns(), s);
+            }
+        } else if (r instanceof ProjectPlan) {
+            ProjectPlan p = (ProjectPlan) r;
+            List<Expr> old = p.getExpressions();
+            List<Expr> s = simplifyExprList(old);
+            if (s != old) {
+                return new ProjectPlan(s, onlyChild(p));
             }
         }
         return r;
@@ -332,7 +346,7 @@ public class Optimizer {
                 Set<String> used = referencedColumns(((FilterPlan) r).getCondition());
                 if (isSelectAll(proj.getColumns()) || proj.getColumns().containsAll(used)) {
                     PlanNode newFilter = new FilterPlan(((FilterPlan) r).getCondition(), onlyChild(proj));
-                    return new ProjectPlan(proj.getColumns(), newFilter);
+                    return new ProjectPlan(proj.getExpressions(), newFilter);
                 }
             }
         }
@@ -383,7 +397,7 @@ public class Optimizer {
     /** 用新的子节点列表重建一个与 n 同类型的节点（仅 Project / Filter 有子节点）。 */
     private PlanNode withChildren(PlanNode n, List<PlanNode> newKids) {
         if (n instanceof ProjectPlan) {
-            return new ProjectPlan(((ProjectPlan) n).getColumns(), newKids.get(0));
+            return new ProjectPlan(((ProjectPlan) n).getExpressions(), newKids.get(0));
         }
         if (n instanceof FilterPlan) {
             return new FilterPlan(((FilterPlan) n).getCondition(), newKids.get(0));

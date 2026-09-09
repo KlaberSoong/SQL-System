@@ -110,13 +110,10 @@ public class Executor {
                 out.add(row);
                 continue;
             }
-            List<Object> projected = new ArrayList<>(plan.getColumns().size());
-            for (String c : plan.getColumns()) {
-                Integer i = idx.get(c);
-                if (i == null) {
-                    throw new DbException("column '" + c + "' not found in projection");
-                }
-                projected.add(row.get(i));
+            // 逐表达式求值（列引用 / 常量 / 算术 / 比较 / 逻辑均可）
+            List<Object> projected = new ArrayList<>(plan.getExpressions().size());
+            for (Expr e : plan.getExpressions()) {
+                projected.add(ExpressionEvaluator.eval(e, idx, row));
             }
             out.add(projected);
         }
