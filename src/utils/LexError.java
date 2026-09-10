@@ -1,7 +1,7 @@
 package utils;
 
 /**
- * 词法错误：非法字符 / 未闭合字符串 / 非法数字等。
+ * 词法错误：非法字符 / 未闭合字符串 / 非法数字等（对应 plan.md 3.1）。
  * 输出格式：[LexError] at (行,列): 原因
  */
 public class LexError extends DbException {

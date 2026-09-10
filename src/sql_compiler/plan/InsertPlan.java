@@ -5,7 +5,7 @@ import sql_compiler.ast.Expr;
 import java.util.List;
 
 /**
- * 插入算子。columns 为 null 表示按建表顺序插入。
+ * 插入算子；columns 为 null 表示按建表顺序插入。
  */
 public class InsertPlan extends PlanNode {
     private final String table;

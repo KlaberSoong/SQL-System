@@ -1,7 +1,7 @@
 package utils;
 
 /**
- * 列定义：列名 + 类型 + （VARCHAR 时的）长度。
+ * 列定义：列名 + 类型 +（VARCHAR 时的）长度。
  */
 public class ColumnDef {
     private final String name;

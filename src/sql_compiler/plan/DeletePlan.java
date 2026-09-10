@@ -3,8 +3,7 @@ package sql_compiler.plan;
 import sql_compiler.ast.Expr;
 
 /**
- * 删除算子。condition 为 null 表示删除全表。
- * 执行引擎实现时可按「扫描 + 过滤 + 标记删除」落地。
+ * 删除算子；condition 为 null 表示删除全表。
  */
 public class DeletePlan extends PlanNode {
     private final String table;

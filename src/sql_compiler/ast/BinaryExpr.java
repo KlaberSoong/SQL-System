@@ -3,8 +3,7 @@ package sql_compiler.ast;
 import utils.Operator;
 
 /**
- * 二元表达式：left op right。
- * op 可为逻辑运算符 AND/OR，也可为算术运算符 +,-,*,/（用于支持常量折叠，如 age > 10+8）。
+ * 二元表达式：left op right，op 为逻辑（AND/OR）或算术（+ - * /）运算符。
  */
 public class BinaryExpr extends Expr {
     private final Operator op;

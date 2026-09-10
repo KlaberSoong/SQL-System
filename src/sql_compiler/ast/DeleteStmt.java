@@ -1,7 +1,7 @@
 package sql_compiler.ast;
 
 /**
- * DELETE FROM 语句。where 可为 null（表示删除全表）。
+ * DELETE FROM 语句；where 可为 null（表示删除全表）。
  */
 public class DeleteStmt implements Statement {
     private final String table;

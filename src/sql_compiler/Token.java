@@ -4,7 +4,7 @@ import utils.ConstSubtype;
 import utils.TokenType;
 
 /**
- * 词法单元，携带种别码、词素值、位置；CONST 类型额外携带子类型与解析后的值。
+ * 词法单元：携带种别码、词素值、位置；CONST 类型额外携带子类型与解析后的值。
  */
 public class Token {
     private final TokenType type;
@@ -37,7 +37,7 @@ public class Token {
         return col;
     }
 
-    /** 仅对 CONST token 调用：设置子类型与解析后的值。 */
+    // 仅对 CONST token 调用：设置子类型与解析后的值
     public void setConst(ConstSubtype subtype, Object value) {
         this.constSubtype = subtype;
         this.constValue = value;
@@ -51,7 +51,7 @@ public class Token {
         return constValue;
     }
 
-    /** 四元式输出：[种别码, 词素值, 行号, 列号]。 */
+    // 四元式输出：[种别码, 词素值, 行号, 列号]
     @Override
     public String toString() {
         return "[" + type + ", " + lexeme + ", " + line + ", " + col + "]";

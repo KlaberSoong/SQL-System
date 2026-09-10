@@ -3,8 +3,7 @@ package sql_compiler.ast;
 import utils.Operator;
 
 /**
- * 比较表达式：left op right，op ∈ {=, !=, <, <=, >, >=}。
- * left / right 可为 ColumnRef、Literal 或算术 BinaryExpr。
+ * 比较表达式：left op right，op ∈ {= != < <= > >=}，结果恒为布尔。
  */
 public class Comparison extends Expr {
     private final Operator op;

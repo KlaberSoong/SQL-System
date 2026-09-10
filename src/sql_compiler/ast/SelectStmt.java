@@ -3,7 +3,7 @@ package sql_compiler.ast;
 import java.util.List;
 
 /**
- * SELECT 语句。selectItems 元素为 ColumnRef 或 Star；where 可为 null。
+ * SELECT 语句；selectItems 为投影表达式列表，where 可为 null。
  */
 public class SelectStmt implements Statement {
     private final List<Expr> selectItems;

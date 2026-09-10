@@ -4,18 +4,11 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 语法错误：输出位置 + 实际符号 + 期望符号集，三段式展示（可定位、可解释）。
- *
- * <p>消息格式：
- * <pre>
- * SyntaxError at line 3, column 19
- * unexpected token: ';'
- * expected: IDENTIFIER | CONST | '(' | NOT
- * </pre>
- * 三段分别对应「位置」「实际符号」「期望集合」，供上层捕获后原样打印而不崩溃。
- *
- * <p>同样通过 {@link #getLine()} / {@link #getCol()} / {@link #getActual()} /
- * {@link #getExpected()} 暴露结构化信息，便于需要定位或做修复建议的调用方使用。
+ * 语法错误：三段式输出「位置 / 实际符号 / 期望集合」（对应 plan.md 3.2）。
+ * 消息形如：
+ *   SyntaxError at line 3, column 19
+ *   unexpected token: ';'
+ *   expected: IDENTIFIER | CONST | '(' | NOT
  */
 public class SyntaxError extends DbException {
     private final int line;
@@ -31,7 +24,7 @@ public class SyntaxError extends DbException {
         this.expected = new ArrayList<>(expected);
     }
 
-    /** 构造三段式错误消息：位置 / 实际符号 / 期望集合。 */
+    // 拼接三段式错误消息：位置 + 实际符号 + 期望集合
     private static String format(int line, int col, String actual, List<String> expected) {
         return "SyntaxError at line " + line + ", column " + col
                 + "\nunexpected token: '" + actual + "'"

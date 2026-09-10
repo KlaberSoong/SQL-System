@@ -1,7 +1,7 @@
 package sql_compiler.ast;
 
 /**
- * 列引用。table 可为 null（单表查询时省略表名）。
+ * 列引用；table 可为 null（单表查询省略表名）。
  */
 public class ColumnRef extends Expr {
     private final String table; // 可为 null

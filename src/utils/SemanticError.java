@@ -1,7 +1,7 @@
 package utils;
 
 /**
- * 语义错误：存在性 / 类型 / 列数列序检查失败。
+ * 语义错误：表/列存在性、类型一致性、列数列序检查失败（对应 plan.md 3.3）。
  * 输出格式：[错误类型, 位置, 原因说明]
  */
 public class SemanticError extends DbException {
