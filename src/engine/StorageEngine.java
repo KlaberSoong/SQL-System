@@ -61,7 +61,7 @@ public class StorageEngine {
         FileManager fm = new FileManager(dataDir, fileName(name));
         fm.init();
         fileManagers.put(name, fm);
-        bufferPools.put(name, new BufferPool(BufferPool.Strategy.LRU, fm));
+        bufferPools.put(name, new BufferPool(BufferPool.Strategy.AUTO, fm));
     }
 
     /** 插入一行（Row -> 字节 -> 页）。 */
@@ -194,7 +194,7 @@ public class StorageEngine {
         if (fm == null) {
             fm = new FileManager(dataDir, fileName(table));
             fileManagers.put(table, fm);
-            bufferPools.put(table, new BufferPool(BufferPool.Strategy.LRU, fm));
+            bufferPools.put(table, new BufferPool(BufferPool.Strategy.AUTO, fm));
         }
         return fm;
     }
@@ -202,6 +202,29 @@ public class StorageEngine {
     private BufferPool bufferPool(String table) {
         fileManager(table);
         return bufferPools.get(table);
+    }
+
+    /** 汇总所有表缓冲池的命中/未命中次数，返回 [hit, miss]。 */
+    public int[] bufferPoolStats() {
+        int hit = 0;
+        int miss = 0;
+        for (BufferPool bp : bufferPools.values()) {
+            hit += bp.getHitCount();
+            miss += bp.getMissCount();
+        }
+        return new int[]{hit, miss};
+    }
+
+    /** 返回所有表缓冲池当前实际生效的策略（去重）。 */
+    public List<BufferPool.Strategy> activeStrategies() {
+        List<BufferPool.Strategy> list = new ArrayList<>();
+        for (BufferPool bp : bufferPools.values()) {
+            BufferPool.Strategy s = bp.getActiveStrategy();
+            if (!list.contains(s)) {
+                list.add(s);
+            }
+        }
+        return list;
     }
 
     private String filePath(String name) {

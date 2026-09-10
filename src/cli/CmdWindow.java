@@ -3,11 +3,15 @@ package cli;
 import engine.CatalogManager;
 import engine.StorageEngine;
 import sql_compiler.Catalog;
+import storage.BufferPool;
 
 import javax.swing.BorderFactory;
 import javax.swing.JFrame;
+import javax.swing.JLabel;
+import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
+import javax.swing.SwingUtilities;
 import javax.swing.text.AbstractDocument;
 import javax.swing.text.AttributeSet;
 import javax.swing.text.BadLocationException;
@@ -33,6 +37,8 @@ public class CmdWindow {
 
     private JFrame frame;
     private JTextArea terminal;
+    private JLabel statusBar;
+    private JTextArea logArea;
 
     /** 当前可编辑行（提示符之后）的起始位置；其左侧为只读保护区。 */
     private int promptPos = 0;
@@ -146,10 +152,18 @@ public class CmdWindow {
 
         frame.setLayout(new BorderLayout());
         frame.add(scroll, BorderLayout.CENTER);
+        frame.add(buildStatusPanel(), BorderLayout.SOUTH);
+
+        // 把缓冲池事件（策略切换 / 淘汰）重定向到界面底部日志区，并同步刷新状态栏。
+        BufferPool.setLogSink(msg -> SwingUtilities.invokeLater(() -> {
+            appendLog(msg);
+            refreshStatus();
+        }));
 
         frame.setVisible(true);
         terminal.requestFocusInWindow();
         terminal.setCaretPosition(promptPos);
+        refreshStatus();
     }
 
     /** 回车提交当前行；结果紧接输入行下方，空一行后再出现新提示符。 */
@@ -189,6 +203,7 @@ public class CmdWindow {
         // 结果紧接输入行下方，随后空一行，再输出新提示符。
         String result = Main.executeAndFormat(sql, storage, catalogManager, catalog);
         terminal.append("\n" + result);
+        refreshStatus();
         terminal.append("\n\n");
         appendNewPrompt();
     }
@@ -257,5 +272,55 @@ public class CmdWindow {
         int len = terminal.getDocument().getLength();
         terminal.replaceRange(text, promptPos, len);
         terminal.setCaretPosition(terminal.getDocument().getLength());
+    }
+
+    /** 构建底部状态面板：上方状态栏（策略/命中率），下方缓冲池事件日志区。 */
+    private JPanel buildStatusPanel() {
+        JPanel panel = new JPanel(new BorderLayout());
+        panel.setBackground(BG);
+
+        statusBar = new JLabel(" ");
+        statusBar.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+        statusBar.setForeground(new Color(0, 200, 0));
+        statusBar.setBorder(BorderFactory.createEmptyBorder(4, 8, 4, 8));
+        panel.add(statusBar, BorderLayout.NORTH);
+
+        logArea = new JTextArea(4, 40);
+        logArea.setEditable(false);
+        logArea.setBackground(BG);
+        logArea.setForeground(new Color(170, 170, 170));
+        logArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+        logArea.setLineWrap(false);
+        JScrollPane logScroll = new JScrollPane(logArea);
+        logScroll.setBorder(BorderFactory.createEmptyBorder());
+        logScroll.getViewport().setBackground(BG);
+        panel.add(logScroll, BorderLayout.CENTER);
+
+        return panel;
+    }
+
+    /** 追加一条缓冲池事件到日志区。 */
+    private void appendLog(String msg) {
+        logArea.append(msg + "\n");
+        logArea.setCaretPosition(logArea.getDocument().getLength());
+    }
+
+    /** 读取各表缓冲池的命中统计与当前策略，刷新状态栏。 */
+    private void refreshStatus() {
+        int[] stats = storage.bufferPoolStats();
+        int total = stats[0] + stats[1];
+        double rate = total == 0 ? 0.0 : stats[0] * 100.0 / total;
+
+        StringBuilder sb = new StringBuilder();
+        for (BufferPool.Strategy s : storage.activeStrategies()) {
+            if (sb.length() > 0) {
+                sb.append('/');
+            }
+            sb.append(s.name());
+        }
+        String strategy = sb.length() == 0 ? "—" : sb.toString();
+
+        statusBar.setText(String.format("策略 %-6s | 命中 %d / 未命中 %d | 命中率 %.1f%%",
+                strategy, stats[0], stats[1], rate));
     }
 }
