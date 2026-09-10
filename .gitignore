@@ -22,5 +22,6 @@ Thumbs.db
 # 计划文档
 plan.md
 
-# 代码结构说明（本地文档，不入库）
+# 本地文档（不入库）
 CODE_STRUCTURE.md
+SQL_COMPILER_GUIDE.md
