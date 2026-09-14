@@ -7,8 +7,10 @@ import sql_compiler.ast.ColumnRef;
 import sql_compiler.ast.Comparison;
 import sql_compiler.ast.CreateTableStmt;
 import sql_compiler.ast.InsertStmt;
+import sql_compiler.ast.IsNullExpr;
 import sql_compiler.ast.JoinRelation;
 import sql_compiler.ast.Literal;
+import sql_compiler.ast.NullLiteral;
 import sql_compiler.ast.SelectStmt;
 import sql_compiler.ast.TableRelation;
 import utils.ColumnDef;
@@ -164,6 +166,46 @@ public class SemanticTest {
             ok = false;
         }
         a.check(ok, "合法比较/赋值不抛异常");
+
+        // —— 新类型：数值族/字符串族/日期/定点 ——
+        a.checkEquals(true, TypeSystem.isNumeric(ColumnType.DECIMAL), "DECIMAL 属数值族");
+        a.checkEquals(true, TypeSystem.isStringFamily(ColumnType.CHAR), "CHAR 属字符串族");
+        a.checkEquals(true, TypeSystem.isStringFamily(ColumnType.TEXT), "TEXT 属字符串族");
+        a.checkEquals(ColumnType.DECIMAL, TypeSystem.arithmetic(ColumnType.DECIMAL, Operator.PLUS, ColumnType.INT), "DECIMAL+INT=DECIMAL");
+        a.checkEquals(ColumnType.DECIMAL, TypeSystem.arithmetic(ColumnType.DECIMAL, Operator.DIV, ColumnType.INT), "DECIMAL 除法=DECIMAL");
+        a.checkEquals(ColumnType.DECIMAL, TypeSystem.checkAggregate("SUM", ColumnType.DECIMAL), "SUM(DECIMAL)→DECIMAL");
+        a.checkEquals(ColumnType.FLOAT, TypeSystem.checkAggregate("AVG", ColumnType.DECIMAL), "AVG(DECIMAL)→FLOAT");
+        boolean typesOk = true;
+        try {
+            TypeSystem.checkComparison(ColumnType.DATE, Operator.GT, ColumnType.DATE); // DATE 全序
+            TypeSystem.checkComparison(ColumnType.VARCHAR, Operator.EQ, ColumnType.CHAR); // 字符串族互比 =/!=
+            TypeSystem.checkAssignable(ColumnType.CHAR, ColumnType.VARCHAR);   // 字符串族互赋
+            TypeSystem.checkAssignable(ColumnType.TEXT, ColumnType.CHAR);
+            TypeSystem.checkAssignable(ColumnType.DATE, ColumnType.VARCHAR);   // VARCHAR 解析为 DATE
+            TypeSystem.checkAssignable(ColumnType.DECIMAL, ColumnType.VARCHAR);
+            TypeSystem.checkAssignable(ColumnType.DECIMAL, ColumnType.INT);
+        } catch (IllegalArgumentException e) {
+            typesOk = false;
+        }
+        a.check(typesOk, "新类型合法比较/赋值不抛异常");
+        a.checkThrows(IllegalArgumentException.class,
+                () -> TypeSystem.checkComparison(ColumnType.CHAR, Operator.GT, ColumnType.CHAR), "CHAR 不支持 >");
+        a.checkThrows(IllegalArgumentException.class,
+                () -> TypeSystem.checkAssignable(ColumnType.INT, ColumnType.VARCHAR), "INT 不接受 VARCHAR");
+
+        // —— NULL 字面量可赋给任意列 ——
+        analyzer.analyze(Collections.singletonList(
+                new InsertStmt("student", null, Arrays.asList(
+                        new Literal(1, ColumnType.INT),
+                        new NullLiteral(),
+                        new NullLiteral()))));
+        a.check(true, "NULL 可赋给任意列（跳过类型检查）");
+
+        // —— IS [NOT] NULL 的 WHERE 类型恒 BOOL ——
+        analyzer.analyze(Collections.singletonList(
+                new SelectStmt(Collections.singletonList(new ColumnRef(null, "id")), "student",
+                        new IsNullExpr(new ColumnRef(null, "age"), false))));
+        a.check(true, "WHERE age IS NULL 通过（返回 BOOL）");
 
         return a.summary("SemanticTest 语义分析");
     }

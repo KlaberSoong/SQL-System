@@ -9,8 +9,10 @@ import sql_compiler.ast.CreateTableStmt;
 import sql_compiler.ast.DeleteStmt;
 import sql_compiler.ast.Expr;
 import sql_compiler.ast.InsertStmt;
+import sql_compiler.ast.IsNullExpr;
 import sql_compiler.ast.JoinRelation;
 import sql_compiler.ast.Literal;
+import sql_compiler.ast.NullLiteral;
 import sql_compiler.ast.OrderByItem;
 import sql_compiler.ast.Relation;
 import sql_compiler.ast.SelectStmt;
@@ -27,6 +29,9 @@ import utils.Operator;
 import utils.SyntaxError;
 import utils.TokenType;
 
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -110,26 +115,33 @@ public class Parser {
         return new CreateTableStmt(table.getLexeme(), columns);
     }
 
-    // 解析列定义：identifier data_type（VARCHAR 必须带括号长度）
+    // 解析列定义：identifier data_type（VARCHAR/CHAR 带 (n)，DECIMAL 带 (p,s)，DATE/TEXT/INT/FLOAT/BOOL 无参数）
     private ColumnDef parseColumnDef() {
         Token name = expectIdentifier();
         Token type = peek();
         if (!isKeyword(type, "INT") && !isKeyword(type, "VARCHAR")
-                && !isKeyword(type, "FLOAT") && !isKeyword(type, "BOOL")) {
-            throw error(type, "INT", "VARCHAR", "FLOAT", "BOOL");
+                && !isKeyword(type, "FLOAT") && !isKeyword(type, "BOOL")
+                && !isKeyword(type, "DATE") && !isKeyword(type, "DECIMAL")
+                && !isKeyword(type, "CHAR") && !isKeyword(type, "TEXT")) {
+            throw error(type, "INT", "VARCHAR", "FLOAT", "BOOL", "DATE", "DECIMAL", "CHAR", "TEXT");
         }
         advance();
-        if (type.getLexeme().equalsIgnoreCase("VARCHAR")) {
+        String kw = type.getLexeme();
+        if (kw.equalsIgnoreCase("VARCHAR") || kw.equalsIgnoreCase("CHAR")) {
             expectDelimiter("(");
-            Token len = peek();
-            if (len.getType() != TokenType.CONST || len.getConstSubtype() != ConstSubtype.INT_CONST) {
-                throw error(len, "int constant");
-            }
-            advance();
+            int len = expectIntConst();
             expectDelimiter(")");
-            return new ColumnDef(name.getLexeme(), ColumnType.VARCHAR, (Integer) len.getConstValue());
+            return new ColumnDef(name.getLexeme(), ColumnType.fromKeyword(kw), len);
         }
-        return new ColumnDef(name.getLexeme(), ColumnType.fromKeyword(type.getLexeme()));
+        if (kw.equalsIgnoreCase("DECIMAL")) {
+            expectDelimiter("(");
+            int precision = expectIntConst();
+            expectDelimiter(",");
+            int scale = expectIntConst();
+            expectDelimiter(")");
+            return new ColumnDef(name.getLexeme(), ColumnType.DECIMAL, precision, scale);
+        }
+        return new ColumnDef(name.getLexeme(), ColumnType.fromKeyword(kw));
     }
 
     // 解析插入语句：INSERT INTO identifier ( '(' column_list ')' )? VALUES '(' expr (',' expr)* ')'
@@ -328,9 +340,14 @@ public class Parser {
         return parseComparison();
     }
 
-    // 解析比较表达式：additive (比较运算符 additive)?，!= 与 <> 均映射为 NE
+    // 解析比较表达式：additive (比较运算符 additive)?，!= 与 <> 均映射为 NE；另支持 IS [NOT] NULL 后置
     private Expr parseComparison() {
         Expr left = parseAdditive();
+        if (matchKeyword("IS")) {
+            boolean notNull = matchKeyword("NOT");
+            expectNullLiteral();
+            return new IsNullExpr(left, notNull);
+        }
         Operator op = null;
         if (checkOperator("=")) {
             op = Operator.EQ;
@@ -390,14 +407,16 @@ public class Parser {
         return left;
     }
 
-    // 判断 token 能否作为 primary 起始（标识符/常量/'('）
+    // 判断 token 能否作为 primary 起始（标识符/常量/'('/类型化字面量 DATE|DECIMAL）
     private boolean canStartPrimary(Token t) {
         return t.getType() == TokenType.IDENTIFIER
                 || t.getType() == TokenType.CONST
+                || isKeyword(t, "DATE")
+                || isKeyword(t, "DECIMAL")
                 || checkDelimiter("(");
     }
 
-    // 解析原子表达式：identifier | constant | '(' or_expr ')' | 聚合调用
+    // 解析原子表达式：identifier | constant | '(' or_expr ')' | 聚合调用 | DATE/DECIMAL 类型化字面量
     private Expr parsePrimary() {
         Token t = peek();
         if (t.getType() == TokenType.IDENTIFIER) {
@@ -405,6 +424,12 @@ public class Parser {
                 return parseAggregateCall();
             }
             return parseColumnRef();
+        }
+        if (isKeyword(t, "DATE") && isStringConst(peek(1))) {
+            return parseTypedLiteral(ColumnType.DATE);
+        }
+        if (isKeyword(t, "DECIMAL") && isStringConst(peek(1))) {
+            return parseTypedLiteral(ColumnType.DECIMAL);
         }
         if (t.getType() == TokenType.CONST) {
             advance();
@@ -451,8 +476,8 @@ public class Parser {
         return new ColumnRef(null, first.getLexeme());
     }
 
-    // 把 CONST token 按子类型转换为对应 ColumnType 的 Literal
-    private Literal toLiteral(Token t) {
+    // 把 CONST token 按子类型转换为对应表达式（NULL_CONST 转为 NullLiteral，其余转为 Literal）
+    private Expr toLiteral(Token t) {
         switch (t.getConstSubtype()) {
             case INT_CONST:
                 return new Literal(t.getConstValue(), ColumnType.INT);
@@ -461,9 +486,52 @@ public class Parser {
             case BOOL_CONST:
                 return new Literal(t.getConstValue(), ColumnType.BOOL);
             case STRING_CONST:
+                return new Literal(t.getConstValue(), ColumnType.VARCHAR);
+            case NULL_CONST:
+                return new NullLiteral();
             default:
                 return new Literal(t.getConstValue(), ColumnType.VARCHAR);
         }
+    }
+
+    // 期望当前 token 为整型常量，命中则消费并返回其值，否则报错
+    private int expectIntConst() {
+        Token t = peek();
+        if (t.getType() != TokenType.CONST || t.getConstSubtype() != ConstSubtype.INT_CONST) {
+            throw error(t, "int constant");
+        }
+        advance();
+        return (Integer) t.getConstValue();
+    }
+
+    // 判断指定 token 是否为字符串常量
+    private boolean isStringConst(Token t) {
+        return t.getType() == TokenType.CONST && t.getConstSubtype() == ConstSubtype.STRING_CONST;
+    }
+
+    // 解析类型化字面量：DATE '...' / DECIMAL '...'，按目标类型解析字符串，非法格式抛 SyntaxError
+    private Expr parseTypedLiteral(ColumnType type) {
+        advance(); // 消费 DATE / DECIMAL 关键字
+        Token str = advance(); // 消费字符串常量
+        String s = (String) str.getConstValue();
+        try {
+            if (type == ColumnType.DATE) {
+                return new Literal(LocalDate.parse(s), ColumnType.DATE);
+            }
+            return new Literal(new BigDecimal(s), ColumnType.DECIMAL);
+        } catch (DateTimeParseException | NumberFormatException e) {
+            throw new SyntaxError(str.getLine(), str.getCol(), s,
+                    Arrays.asList("valid " + type.getKeyword() + " literal"));
+        }
+    }
+
+    // 期望当前 token 为 NULL 字面量（NULL_CONST 常量），命中则消费，否则报错
+    private void expectNullLiteral() {
+        Token t = peek();
+        if (t.getType() != TokenType.CONST || t.getConstSubtype() != ConstSubtype.NULL_CONST) {
+            throw error(t, "NULL");
+        }
+        advance();
     }
 
     // 预读当前 token，越界返回 EOF 哨兵

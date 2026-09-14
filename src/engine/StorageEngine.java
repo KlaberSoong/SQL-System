@@ -10,6 +10,7 @@ import utils.ColumnType;
 import utils.Constants;
 import utils.DbException;
 import utils.Serializer;
+import utils.TypeCoercion;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -157,27 +158,13 @@ public class StorageEngine {
                     throw new DbException("column '" + a.getColumn() + "' not found in table '" + table + "'");
                 }
                 Object value = ExpressionEvaluator.eval(a.getValue(), idx, row);
-                newRow.set(j, coerce(value, schema.get(j).getType()));
+                newRow.set(j, TypeCoercion.coerce(value, schema.get(j)));
             }
             newRows.add(newRow);
             updated++;
         }
         rewriteTable(table, newRows);
         return updated;
-    }
-
-    /** 值 -> 目标列类型的运行时转换（补 INT <-> FLOAT 拓宽；其余原样）。 */
-    private static Object coerce(Object value, ColumnType target) {
-        if (value == null) {
-            return value;
-        }
-        if (target == ColumnType.FLOAT && value instanceof Number) {
-            return ((Number) value).floatValue();
-        }
-        if (target == ColumnType.INT && value instanceof Number) {
-            return ((Number) value).intValue();
-        }
-        return value;
     }
 
     /** 全量重写表：清空所有数据页后重新打包写入，并回收尾部空页。 */

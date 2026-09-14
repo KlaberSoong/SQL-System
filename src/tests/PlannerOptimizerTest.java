@@ -132,6 +132,11 @@ public class PlannerOptimizerTest {
         a.checkContains(join.toTree(), "Join[LEFT JOIN", "计划含 LEFT JOIN");
         a.checkContains(join.toTree(), "SeqScan[emp AS a]", "左表 SeqScan 含别名 a");
 
+        // —— IS NULL 条件进入 Filter ——
+        PlanNode isNull = planner.plan((SelectStmt) new Parser(new Lexer(
+                "SELECT id FROM student WHERE age IS NULL;").tokenize()).parseProgram().get(0));
+        a.checkContains(isNull.toTree(), "Filter[age IS NULL]", "IS NULL 条件进入 Filter 节点");
+
         return a.summary("PlannerOptimizerTest 计划与优化");
     }
 

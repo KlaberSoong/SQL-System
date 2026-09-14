@@ -13,17 +13,26 @@ public final class TypeSystem {
     private TypeSystem() {
     }
 
-    // 是否为数值类型（INT / FLOAT）
+    // 是否为数值类型（INT / FLOAT / DECIMAL）
     public static boolean isNumeric(ColumnType t) {
-        return t == ColumnType.INT || t == ColumnType.FLOAT;
+        return t == ColumnType.INT || t == ColumnType.FLOAT || t == ColumnType.DECIMAL;
     }
 
-    // 算术运算（+ - * /）的结果类型：两侧须为数值，除法恒为 FLOAT，否则含 FLOAT 则为 FLOAT
+    // 是否为字符串族类型（VARCHAR / CHAR / TEXT）
+    public static boolean isStringFamily(ColumnType t) {
+        return t == ColumnType.VARCHAR || t == ColumnType.CHAR || t == ColumnType.TEXT;
+    }
+
+    // 算术运算（+ - * /）的结果类型：两侧须为数值；含 DECIMAL 则结果为 DECIMAL，
+    // 除法（无 DECIMAL）恒为 FLOAT，否则含 FLOAT 则为 FLOAT，全 INT 则为 INT
     public static ColumnType arithmetic(ColumnType left, Operator op, ColumnType right) {
         if (!isNumeric(left) || !isNumeric(right)) {
             throw new IllegalArgumentException(
                     "arithmetic operator '" + op.getText() + "' requires numeric operands, but got "
                             + left + " and " + right);
+        }
+        if (left == ColumnType.DECIMAL || right == ColumnType.DECIMAL) {
+            return ColumnType.DECIMAL;
         }
         if (op == Operator.DIV) {
             return ColumnType.FLOAT;
@@ -33,10 +42,21 @@ public final class TypeSystem {
                 : ColumnType.INT;
     }
 
-    // 比较运算（= != < <= > >=）的类型合法性检查：数值任意比较，同型 VARCHAR/BOOL 仅支持 =/!=
+    // 比较运算（= != < <= > >=）的类型合法性检查：数值任意比较；DATE 支持全序；
+    // 字符串族（VARCHAR/CHAR/TEXT）与 BOOL 仅支持 =/!=
     public static void checkComparison(ColumnType left, Operator op, ColumnType right) {
         if (isNumeric(left) && isNumeric(right)) {
             return;
+        }
+        if (left == ColumnType.DATE && right == ColumnType.DATE) {
+            return; // DATE 支持全部序比较
+        }
+        if (isStringFamily(left) && isStringFamily(right)) {
+            if (op == Operator.EQ || op == Operator.NE) {
+                return;
+            }
+            throw new IllegalArgumentException(
+                    "operator '" + op.getText() + "' is not supported for type " + left);
         }
         if (left == right) {
             if (op == Operator.EQ || op == Operator.NE) {
@@ -66,12 +86,21 @@ public final class TypeSystem {
         }
     }
 
-    // INSERT 赋值兼容性检查：类型一致或 INT→FLOAT 拓宽合法，其余报错
+    // INSERT 赋值兼容性检查：数值族互赋；字符串族互赋；DATE ← DATE|VARCHAR；DECIMAL ← 数值|VARCHAR
     public static void checkAssignable(ColumnType columnType, ColumnType valueType) {
         if (columnType == valueType) {
             return;
         }
-        if (columnType == ColumnType.FLOAT && valueType == ColumnType.INT) {
+        if (isNumeric(columnType) && isNumeric(valueType)) {
+            return;
+        }
+        if (isStringFamily(columnType) && isStringFamily(valueType)) {
+            return;
+        }
+        if (columnType == ColumnType.DATE && valueType == ColumnType.VARCHAR) {
+            return;
+        }
+        if (columnType == ColumnType.DECIMAL && valueType == ColumnType.VARCHAR) {
             return;
         }
         throw new IllegalArgumentException(

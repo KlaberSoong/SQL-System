@@ -9,7 +9,11 @@ statement     -> create_stmt | insert_stmt | select_stmt | delete_stmt | update_
 
 create_stmt   -> CREATE TABLE identifier '(' column_def (',' column_def)* ')' ';' ;
 column_def    -> identifier type ;
-type          -> INT | FLOAT | BOOL | VARCHAR '(' int_const ')' ;
+type          -> INT | FLOAT | BOOL
+               | VARCHAR '(' int_const ')'
+               | CHAR '(' int_const ')'
+               | DECIMAL '(' int_const ',' int_const ')'
+               | DATE | TEXT ;
 
 insert_stmt   -> INSERT INTO identifier ( '(' id_list ')' )?
                  VALUES '(' value_list ')' ';' ;
@@ -33,7 +37,8 @@ assignment    -> identifier '=' expression ;
 > 说明：
 >
 > - 每个语句以 `';'` 结尾；顶层入口为 `statement`。
-> - `type` 为 `INT | FLOAT | BOOL | VARCHAR(n)`；`VARCHAR` 必须带括号长度参数。
+> - `type` 为 `INT | FLOAT | BOOL | VARCHAR(n) | CHAR(n) | DECIMAL(p,s) | DATE | TEXT`；
+>   `VARCHAR(n)`/`CHAR(n)` 必须带括号长度参数，`DECIMAL(p,s)` 带精度与标度两个参数，`DATE`/`TEXT` 无参数。
 > - `relation` 中的 `','` 是交叉连接（等价于 `INNER JOIN` 且无 `ON`）；`JOIN` 简写等价于 `INNER JOIN`。
 > - `table_ref` 的别名可写 `AS alias` 或省略 `AS`（紧跟的标识符即别名）；列引用支持 `alias.col` / `table.col`。
 
@@ -42,18 +47,23 @@ assignment    -> identifier '=' expression ;
 ```
 expression     := comparison
 comparison     := additive ( ('='|'!='|'<>'|'<'|'<='|'>'|'>=') additive )?
+                | additive IS [NOT] NULL
 additive       := multiplicative ( ('+'|'-') multiplicative )*
 multiplicative := primary ( ('*'|'/') primary )*
 primary        := identifier ('.' identifier)? | CONST | '(' expression ')' | aggregate_call
+                | NULL | DATE STRING_CONST | DECIMAL STRING_CONST
 aggregate_call := (COUNT | SUM | AVG | MIN | MAX) '(' ( '*' | expression ) ')'
 id_list        := identifier (',' identifier)*
 value_list     := expression (',' expression)*
-CONST          := INT_CONST | FLOAT_CONST | STRING_CONST | BOOL_CONST
+CONST          := INT_CONST | FLOAT_CONST | STRING_CONST | BOOL_CONST | NULL_CONST
 ```
 
 > 注意：
 >
 > - `expression` 中比较运算符集合（含 `!=`、`<>`、`==`）以 `Lexer.java` 实际支持为准。
+> - `IS [NOT] NULL` 是后置一元谓词，恒返回确定 `BOOL`；普通比较 `x = NULL` 结果恒为 UNKNOWN（三值逻辑）。
+> - `NULL` 是词法层 NULL_CONST 常量（非关键字），对应内部 `null`；`DATE '...'` / `DECIMAL '...'` 是类型化字面量，
+>   分别按 ISO 日期（`yyyy-MM-dd`）与定点小数解析，非法格式抛语法错误。
 > - 聚合函数名（COUNT/SUM/AVG/MIN/MAX）**不是**保留关键字，仅当标识符后紧跟 `(` 时才按聚合调用解析；`COUNT(*)` 表示计数整行（参数为 `*`），其余聚合需数值/可比较参数。
 > - 逻辑/算术优先级由低到高：`OR < AND < NOT < 比较 < 加减 < 乘除 < 原子`。
 
@@ -61,9 +71,9 @@ CONST          := INT_CONST | FLOAT_CONST | STRING_CONST | BOOL_CONST
 
 | 种别码     | 说明                                          | 示例                                                                 |
 | ---------- | --------------------------------------------- | -------------------------------------------------------------------- |
-| KEYWORD    | 关键字（大小写不敏感）                        | SELECT FROM WHERE CREATE TABLE INSERT INTO VALUES DELETE UPDATE SET INT VARCHAR FLOAT BOOL AND OR NOT ORDER BY GROUP JOIN INNER LEFT ON AS ASC DESC |
+| KEYWORD    | 关键字（大小写不敏感）                        | SELECT FROM WHERE CREATE TABLE INSERT INTO VALUES DELETE UPDATE SET INT VARCHAR FLOAT BOOL DATE DECIMAL CHAR TEXT AND OR NOT ORDER BY GROUP JOIN INNER LEFT ON AS ASC DESC IS |
 | IDENTIFIER | 标识符（字母/下划线开头，后跟字母数字下划线） | student、age、user_name、count（非关键字）                          |
-| CONST      | 常量（INT_CONST / FLOAT_CONST / STRING_CONST / BOOL_CONST） | 20、3.14、'Alice'、true                                             |
+| CONST      | 常量（INT_CONST / FLOAT_CONST / STRING_CONST / BOOL_CONST / NULL_CONST） | 20、3.14、'Alice'、true、NULL             |
 | OPERATOR   | 运算符（多字符优先匹配）                      | = == != <> < <= > >= + - * /                                       |
 | DELIMITER  | 分隔符                                        | ( ) , ; .                                                          |
 

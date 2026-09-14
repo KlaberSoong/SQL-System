@@ -20,6 +20,7 @@ import javax.swing.SwingUtilities;
 import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.InputStreamReader;
+import java.time.LocalDate;
 import java.util.Collections;
 import java.util.List;
 
@@ -150,6 +151,9 @@ public class Main {
             return "NULL";
         }
         if (v instanceof String) {
+            return "'" + v + "'";
+        }
+        if (v instanceof LocalDate) {
             return "'" + v + "'";
         }
         return String.valueOf(v);

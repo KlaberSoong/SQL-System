@@ -10,8 +10,10 @@ import sql_compiler.ast.Comparison;
 import sql_compiler.ast.CreateTableStmt;
 import sql_compiler.ast.DeleteStmt;
 import sql_compiler.ast.InsertStmt;
+import sql_compiler.ast.IsNullExpr;
 import sql_compiler.ast.JoinRelation;
 import sql_compiler.ast.Literal;
+import sql_compiler.ast.NullLiteral;
 import sql_compiler.ast.OrderByItem;
 import sql_compiler.ast.SelectStmt;
 import sql_compiler.ast.Star;
@@ -23,6 +25,8 @@ import utils.JoinType;
 import utils.Operator;
 import utils.SyntaxError;
 
+import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 
 /**
@@ -169,6 +173,38 @@ public class ParserTest {
         OrderByItem first = ord.getOrderBy().get(0);
         a.checkEquals(false, first.isAsc(), "DESC 键 asc=false");
         a.checkEquals(true, ord.getOrderBy().get(1).isAsc(), "ASC 键 asc=true");
+
+        // —— NULL 字面量 / IS [NOT] NULL ——
+        SelectStmt nul = (SelectStmt) parse("SELECT NULL FROM t;").get(0);
+        a.checkEquals(true, nul.getSelectItems().get(0) instanceof NullLiteral, "SELECT NULL 解析为 NullLiteral");
+        IsNullExpr isNull = (IsNullExpr) ((SelectStmt) parse("SELECT * FROM t WHERE a IS NULL;").get(0)).getWhere();
+        a.checkEquals(false, isNull.isNotNull(), "IS NULL 的 notNull=false");
+        a.checkEquals("a", ((ColumnRef) isNull.getOperand()).getColumn(), "IS NULL 操作数");
+        IsNullExpr isNotNull = (IsNullExpr) ((SelectStmt) parse("SELECT * FROM t WHERE a IS NOT NULL;").get(0)).getWhere();
+        a.checkEquals(true, isNotNull.isNotNull(), "IS NOT NULL 的 notNull=true");
+
+        // —— 新类型列定义 ——
+        CreateTableStmt nt = (CreateTableStmt) parse(
+                "CREATE TABLE t(d DATE, p DECIMAL(10,2), c CHAR(4), n TEXT);").get(0);
+        a.checkEquals(ColumnType.DATE, nt.getColumns().get(0).getType(), "DATE 列类型");
+        a.checkEquals(ColumnType.DECIMAL, nt.getColumns().get(1).getType(), "DECIMAL 列类型");
+        a.checkEquals(10, nt.getColumns().get(1).getLength(), "DECIMAL 精度 10");
+        a.checkEquals(2, nt.getColumns().get(1).getScale(), "DECIMAL 标度 2");
+        a.checkEquals(ColumnType.CHAR, nt.getColumns().get(2).getType(), "CHAR 列类型");
+        a.checkEquals(4, nt.getColumns().get(2).getLength(), "CHAR 长度 4");
+        a.checkEquals(ColumnType.TEXT, nt.getColumns().get(3).getType(), "TEXT 列类型");
+
+        // —— 类型化字面量 DATE/DECIMAL ——
+        Comparison dCmp = (Comparison) ((SelectStmt) parse(
+                "SELECT * FROM t WHERE d = DATE '2024-01-01';").get(0)).getWhere();
+        Literal dLit = (Literal) dCmp.getRight();
+        a.checkEquals(ColumnType.DATE, dLit.getType(), "DATE 字面量类型");
+        a.checkEquals(LocalDate.of(2024, 1, 1), dLit.getValue(), "DATE 字面量值");
+        Comparison pCmp = (Comparison) ((SelectStmt) parse(
+                "SELECT * FROM t WHERE p = DECIMAL '12.34';").get(0)).getWhere();
+        Literal pLit = (Literal) pCmp.getRight();
+        a.checkEquals(ColumnType.DECIMAL, pLit.getType(), "DECIMAL 字面量类型");
+        a.checkEquals(new BigDecimal("12.34"), pLit.getValue(), "DECIMAL 字面量值");
 
         // —— 边界：大小写混用 / 多语句 / 末尾分号 ——
         a.checkEquals(1, parse("sElEcT * fRoM student;").size(), "整句大小写混用");

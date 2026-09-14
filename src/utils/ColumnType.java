@@ -7,7 +7,12 @@ public enum ColumnType {
     INT("int"),
     FLOAT("float"),
     VARCHAR("varchar"),
-    BOOL("bool");
+    BOOL("bool"),
+    // 新增类型必须追加在 BOOL 之后，保持 pg_catalog 里 type 的枚举序（0-3）不变
+    DATE("date"),
+    DECIMAL("decimal"),
+    CHAR("char"),
+    TEXT("text");
 
     private final String keyword;
 
@@ -26,6 +31,10 @@ public enum ColumnType {
             case "FLOAT": return FLOAT;
             case "VARCHAR": return VARCHAR;
             case "BOOL": return BOOL;
+            case "DATE": return DATE;
+            case "DECIMAL": return DECIMAL;
+            case "CHAR": return CHAR;
+            case "TEXT": return TEXT;
             default: return null;
         }
     }

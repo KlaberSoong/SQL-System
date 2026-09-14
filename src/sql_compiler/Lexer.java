@@ -25,8 +25,9 @@ public class Lexer {
     static {
         String[] kws = {"SELECT", "FROM", "WHERE", "CREATE", "TABLE", "INSERT", "INTO",
                 "VALUES", "DELETE", "UPDATE", "SET", "INT", "VARCHAR", "FLOAT", "BOOL",
+                "DATE", "DECIMAL", "CHAR", "TEXT",
                 "AND", "OR", "NOT", "ORDER", "BY", "GROUP", "JOIN", "INNER", "LEFT",
-                "ON", "AS", "ASC", "DESC"};
+                "ON", "AS", "ASC", "DESC", "IS"};
         for (String kw : kws) {
             KEYWORDS.add(kw);
         }
@@ -111,6 +112,11 @@ public class Lexer {
         if (lexeme.equalsIgnoreCase("true") || lexeme.equalsIgnoreCase("false")) {
             Token token = new Token(TokenType.CONST, lexeme, startLine, startCol);
             token.setConst(ConstSubtype.BOOL_CONST, lexeme.equalsIgnoreCase("true"));
+            return token;
+        }
+        if (lexeme.equalsIgnoreCase("null")) {
+            Token token = new Token(TokenType.CONST, lexeme, startLine, startCol);
+            token.setConst(ConstSubtype.NULL_CONST, null);
             return token;
         }
         TokenType type = KEYWORDS.contains(lexeme.toUpperCase()) ? TokenType.KEYWORD : TokenType.IDENTIFIER;

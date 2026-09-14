@@ -58,9 +58,9 @@ public class CatalogManager {
             String table = (String) row.get(0);
             String column = (String) row.get(1);
             int typeOrdinal = (Integer) row.get(2);
-            int varcharLen = (Integer) row.get(3);
+            int param = (Integer) row.get(3);
             int position = (Integer) row.get(4);
-            ColumnDef def = new ColumnDef(column, ColumnType.values()[typeOrdinal], varcharLen);
+            ColumnDef def = ColumnDef.fromPersisted(column, ColumnType.values()[typeOrdinal], param);
             tables.computeIfAbsent(table, k -> new TreeMap<>()).put(position, def);
         }
 
@@ -80,7 +80,7 @@ public class CatalogManager {
                     name,
                     c.getName(),
                     c.getType().ordinal(),
-                    c.getVarcharLength(),
+                    c.persistedParam(),
                     i));
         }
     }

@@ -9,8 +9,10 @@ import sql_compiler.ast.CreateTableStmt;
 import sql_compiler.ast.DeleteStmt;
 import sql_compiler.ast.Expr;
 import sql_compiler.ast.InsertStmt;
+import sql_compiler.ast.IsNullExpr;
 import sql_compiler.ast.JoinRelation;
 import sql_compiler.ast.Literal;
+import sql_compiler.ast.NullLiteral;
 import sql_compiler.ast.OrderByItem;
 import sql_compiler.ast.Relation;
 import sql_compiler.ast.SelectStmt;
@@ -110,22 +112,25 @@ public class SemanticAnalyzer {
             ColumnDef col = targetCols.get(i);
             Expr valueExpr = stmt.getValues().get(i);
             ColumnType valueType = inferType(valueExpr, scope);
-            try {
-                TypeSystem.checkAssignable(col.getType(), valueType);
-            } catch (IllegalArgumentException e) {
-                fail("TypeError", e.getMessage() + " (column '" + col.getName() + "')");
+            // NULL 字面量可赋给任意列，跳过类型检查
+            if (!(valueExpr instanceof NullLiteral)) {
+                try {
+                    TypeSystem.checkAssignable(col.getType(), valueType);
+                } catch (IllegalArgumentException e) {
+                    fail("TypeError", e.getMessage() + " (column '" + col.getName() + "')");
+                }
             }
             checkVarcharLength(col, valueExpr);
         }
     }
 
-    // 若值是 VARCHAR 字面量，检查其长度不超过列声明的 VARCHAR(n)
+    // 若值是 VARCHAR 字面量，检查其长度不超过列声明的 VARCHAR(n)（CHAR(n) 由 coerce 补空格/截断，不在此报错）
     private void checkVarcharLength(ColumnDef col, Expr valueExpr) {
         if (col.getType() == ColumnType.VARCHAR && valueExpr instanceof Literal) {
             Object v = ((Literal) valueExpr).getValue();
-            if (v instanceof String && ((String) v).length() > col.getVarcharLength()) {
+            if (v instanceof String && ((String) v).length() > col.getLength()) {
                 fail("ValueTooLong", "value for column '" + col.getName()
-                        + "' exceeds VARCHAR(" + col.getVarcharLength() + ")");
+                        + "' exceeds VARCHAR(" + col.getLength() + ")");
             }
         }
     }
@@ -192,10 +197,13 @@ public class SemanticAnalyzer {
                 fail("ColumnNotFound", "column '" + a.getColumn() + "' does not exist in table '" + table + "'");
             }
             ColumnType vt = inferType(a.getValue(), scope);
-            try {
-                TypeSystem.checkAssignable(col.getType(), vt);
-            } catch (IllegalArgumentException e) {
-                fail("TypeError", e.getMessage() + " (column '" + col.getName() + "')");
+            // NULL 字面量可赋给任意列，跳过类型检查
+            if (!(a.getValue() instanceof NullLiteral)) {
+                try {
+                    TypeSystem.checkAssignable(col.getType(), vt);
+                } catch (IllegalArgumentException e) {
+                    fail("TypeError", e.getMessage() + " (column '" + col.getName() + "')");
+                }
             }
         }
         checkWhere(stmt.getWhere(), scope);
@@ -217,6 +225,13 @@ public class SemanticAnalyzer {
         if (e instanceof Literal) {
             return ((Literal) e).getType();
         }
+        if (e instanceof NullLiteral) {
+            return null; // 无类型哨兵，可赋给任意列
+        }
+        if (e instanceof IsNullExpr) {
+            inferType(((IsNullExpr) e).getOperand(), scope);
+            return ColumnType.BOOL;
+        }
         if (e instanceof ColumnRef) {
             return resolveColumn((ColumnRef) e, scope);
         }
@@ -236,10 +251,13 @@ public class SemanticAnalyzer {
             Comparison c = (Comparison) e;
             ColumnType left = inferType(c.getLeft(), scope);
             ColumnType right = inferType(c.getRight(), scope);
-            try {
-                TypeSystem.checkComparison(left, c.getOp(), right);
-            } catch (IllegalArgumentException ex) {
-                fail("TypeError", ex.getMessage());
+            // 任一操作数为 NULL 字面量时跳过比较类型检查（NULL 可与任意类型比较）
+            if (!(c.getLeft() instanceof NullLiteral) && !(c.getRight() instanceof NullLiteral)) {
+                try {
+                    TypeSystem.checkComparison(left, c.getOp(), right);
+                } catch (IllegalArgumentException ex) {
+                    fail("TypeError", ex.getMessage());
+                }
             }
             return ColumnType.BOOL;
         }
@@ -336,6 +354,9 @@ public class SemanticAnalyzer {
         if (e instanceof Comparison) {
             Comparison c = (Comparison) e;
             return containsAggregate(c.getLeft()) || containsAggregate(c.getRight());
+        }
+        if (e instanceof IsNullExpr) {
+            return containsAggregate(((IsNullExpr) e).getOperand());
         }
         if (e instanceof BinaryExpr) {
             BinaryExpr b = (BinaryExpr) e;

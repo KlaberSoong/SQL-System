@@ -17,9 +17,9 @@ import sql_compiler.plan.SeqScanPlan;
 import sql_compiler.plan.SortPlan;
 import sql_compiler.plan.UpdatePlan;
 import utils.ColumnDef;
-import utils.ColumnType;
 import utils.DbException;
 import utils.JoinType;
+import utils.TypeCoercion;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -262,8 +262,7 @@ public class Executor {
 
     /**
      * 把 INSERT 的列名列表与值表达式列表合并为「按建表顺序的完整行」。
-     * 省略列名列表时按建表顺序取全部列；显式列名列表时未指定的列填类型默认值
-     * （INT/FLOAT=0、BOOL=false、VARCHAR=""，本子集无 NULL）。
+     * 省略列名列表时按建表顺序取全部列；显式列名列表时未指定的列填 SQL NULL。
      */
     private List<Object> buildInsertRow(String table, List<ColumnDef> schema, InsertPlan plan) {
         List<Object> values = new ArrayList<>(plan.getValues().size());
@@ -271,10 +270,10 @@ public class Executor {
             values.add(ExpressionEvaluator.eval(v, Collections.emptyMap(), Collections.emptyList()));
         }
         if (plan.getColumns() == null) {
-            // 按建表顺序取全列；值需按目标列类型转换（如 INT 字面量写入 FLOAT 列时拓宽为 Float）
+            // 按建表顺序取全列；值按目标列类型转换（如 INT 字面量写入 FLOAT 列时拓宽为 Float）
             List<Object> coerced = new ArrayList<>(values.size());
             for (int i = 0; i < values.size(); i++) {
-                coerced.add(coerce(values.get(i), schema.get(i).getType()));
+                coerced.add(TypeCoercion.coerce(values.get(i), schema.get(i)));
             }
             return coerced;
         }
@@ -283,7 +282,7 @@ public class Executor {
         }
         Object[] full = new Object[schema.size()];
         for (int i = 0; i < schema.size(); i++) {
-            full[i] = defaultValue(schema.get(i).getType());
+            full[i] = null; // 省略列默认 SQL NULL
         }
         Map<String, Integer> idx = ExpressionEvaluator.indexMap(columnNames(schema));
         for (int i = 0; i < plan.getColumns().size(); i++) {
@@ -292,33 +291,9 @@ public class Executor {
                 throw new DbException("column '" + plan.getColumns().get(i)
                         + "' not found in table '" + table + "'");
             }
-            full[j] = coerce(values.get(i), schema.get(j).getType());
+            full[j] = TypeCoercion.coerce(values.get(i), schema.get(j));
         }
         return Arrays.asList(full);
-    }
-
-    /** 值类型 -> 列类型 的运行时转换（语义分析已保证兼容，这里补齐 INT -> FLOAT 拓宽）。 */
-    private static Object coerce(Object value, ColumnType target) {
-        if (value == null) {
-            return value;
-        }
-        if (target == ColumnType.FLOAT && value instanceof Number) {
-            return ((Number) value).floatValue();
-        }
-        if (target == ColumnType.INT && value instanceof Number) {
-            return ((Number) value).intValue();
-        }
-        return value;
-    }
-
-    private static Object defaultValue(ColumnType t) {
-        switch (t) {
-            case INT: return 0;
-            case FLOAT: return 0.0f;
-            case BOOL: return false;
-            case VARCHAR: return "";
-            default: throw new DbException("unknown column type: " + t);
-        }
     }
 
     private List<ColumnDef> requireSchema(String table) {
