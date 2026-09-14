@@ -16,6 +16,7 @@ public class AllTests {
         failed += StorageTest.run();
         failed += EngineTest.run();
         failed += EndToEndTest.run();
+        failed += AdvancedSqlTest.run();
         failed += FuzzTest.run();
 
         System.out.println();

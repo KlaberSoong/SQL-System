@@ -1,5 +1,6 @@
 package engine;
 
+import sql_compiler.ast.Assignment;
 import sql_compiler.ast.Expr;
 import storage.BufferPool;
 import storage.FileManager;
@@ -127,6 +128,56 @@ public class StorageEngine {
         int removed = all.size() - survivors.size();
         rewriteTable(table, survivors);
         return removed;
+    }
+
+    /** 按条件更新行（条件为 null 表示更新全表），返回更新行数。SET 值基于原行同时求值。 */
+    public int updateRows(String table, Expr condition, List<Assignment> assignments) {
+        List<ColumnDef> schema = requireSchema(table);
+        List<String> colNames = columnNames(schema);
+        Map<String, Integer> idx = ExpressionEvaluator.indexMap(colNames);
+
+        // 目标列名 -> 列下标
+        Map<String, Integer> colIndex = new HashMap<>();
+        for (int i = 0; i < colNames.size(); i++) {
+            colIndex.put(colNames.get(i), i);
+        }
+
+        List<List<Object>> all = scanTable(table);
+        List<List<Object>> newRows = new ArrayList<>(all.size());
+        int updated = 0;
+        for (List<Object> row : all) {
+            if (condition != null && !ExpressionEvaluator.evalCondition(condition, idx, row)) {
+                newRows.add(row);
+                continue;
+            }
+            List<Object> newRow = new ArrayList<>(row);
+            for (Assignment a : assignments) {
+                Integer j = colIndex.get(a.getColumn());
+                if (j == null) {
+                    throw new DbException("column '" + a.getColumn() + "' not found in table '" + table + "'");
+                }
+                Object value = ExpressionEvaluator.eval(a.getValue(), idx, row);
+                newRow.set(j, coerce(value, schema.get(j).getType()));
+            }
+            newRows.add(newRow);
+            updated++;
+        }
+        rewriteTable(table, newRows);
+        return updated;
+    }
+
+    /** 值 -> 目标列类型的运行时转换（补 INT <-> FLOAT 拓宽；其余原样）。 */
+    private static Object coerce(Object value, ColumnType target) {
+        if (value == null) {
+            return value;
+        }
+        if (target == ColumnType.FLOAT && value instanceof Number) {
+            return ((Number) value).floatValue();
+        }
+        if (target == ColumnType.INT && value instanceof Number) {
+            return ((Number) value).intValue();
+        }
+        return value;
     }
 
     /** 全量重写表：清空所有数据页后重新打包写入，并回收尾部空页。 */

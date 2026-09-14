@@ -24,7 +24,9 @@ public class Lexer {
 
     static {
         String[] kws = {"SELECT", "FROM", "WHERE", "CREATE", "TABLE", "INSERT", "INTO",
-                "VALUES", "DELETE", "INT", "VARCHAR", "FLOAT", "BOOL", "AND", "OR", "NOT"};
+                "VALUES", "DELETE", "UPDATE", "SET", "INT", "VARCHAR", "FLOAT", "BOOL",
+                "AND", "OR", "NOT", "ORDER", "BY", "GROUP", "JOIN", "INNER", "LEFT",
+                "ON", "AS", "ASC", "DESC"};
         for (String kw : kws) {
             KEYWORDS.add(kw);
         }

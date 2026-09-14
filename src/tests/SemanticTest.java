@@ -7,10 +7,13 @@ import sql_compiler.ast.ColumnRef;
 import sql_compiler.ast.Comparison;
 import sql_compiler.ast.CreateTableStmt;
 import sql_compiler.ast.InsertStmt;
+import sql_compiler.ast.JoinRelation;
 import sql_compiler.ast.Literal;
 import sql_compiler.ast.SelectStmt;
+import sql_compiler.ast.TableRelation;
 import utils.ColumnDef;
 import utils.ColumnType;
+import utils.JoinType;
 import utils.Operator;
 import utils.SemanticError;
 
@@ -110,6 +113,35 @@ public class SemanticTest {
         analyzer.analyze(Collections.singletonList(
                 new InsertStmt("f", null, Collections.singletonList(new Literal(1, ColumnType.INT)))));
         a.check(true, "INT 写入 FLOAT 列合法（拓宽）");
+
+        // —— 聚合函数类型 ——
+        a.checkEquals(ColumnType.INT, TypeSystem.checkAggregate("COUNT", null), "COUNT→INT");
+        a.checkEquals(ColumnType.INT, TypeSystem.checkAggregate("SUM", ColumnType.INT), "SUM(INT)→INT");
+        a.checkEquals(ColumnType.FLOAT, TypeSystem.checkAggregate("SUM", ColumnType.FLOAT), "SUM(FLOAT)→FLOAT");
+        a.checkEquals(ColumnType.FLOAT, TypeSystem.checkAggregate("AVG", ColumnType.INT), "AVG(INT)→FLOAT");
+        a.checkEquals(ColumnType.VARCHAR, TypeSystem.checkAggregate("MAX", ColumnType.VARCHAR), "MAX(VARCHAR)→VARCHAR");
+        a.checkThrows(IllegalArgumentException.class,
+                () -> TypeSystem.checkAggregate("SUM", ColumnType.VARCHAR), "SUM(VARCHAR) 报错");
+
+        // —— 多表 JOIN 作用域：列名歧义与表限定消歧 ——
+        analyzer.analyze(Collections.singletonList(new CreateTableStmt("a", Arrays.asList(
+                new ColumnDef("id", ColumnType.INT), new ColumnDef("x", ColumnType.INT)))));
+        analyzer.analyze(Collections.singletonList(new CreateTableStmt("b", Arrays.asList(
+                new ColumnDef("id", ColumnType.INT), new ColumnDef("y", ColumnType.INT)))));
+        SemanticError amb = a.checkThrows(SemanticError.class,
+                () -> analyzer.analyze(Collections.singletonList(new SelectStmt(
+                        Collections.singletonList(new ColumnRef(null, "id")),
+                        new JoinRelation(new TableRelation("a", null), new TableRelation("b", null),
+                                JoinType.INNER, null),
+                        null, null, null))),
+                "多表无限定列名歧义");
+        if (amb != null) a.checkEquals("AmbiguousColumn", amb.getErrorType(), "歧义列错误类型");
+        analyzer.analyze(Collections.singletonList(new SelectStmt(
+                Collections.singletonList(new ColumnRef("a", "id")),
+                new JoinRelation(new TableRelation("a", null), new TableRelation("b", null),
+                        JoinType.INNER, null),
+                null, null, null)));
+        a.check(true, "表限定列名消歧通过");
 
         // —— 类型系统规则 ——
         a.checkEquals(ColumnType.INT, TypeSystem.arithmetic(ColumnType.INT, Operator.PLUS, ColumnType.INT), "INT+INT=INT");

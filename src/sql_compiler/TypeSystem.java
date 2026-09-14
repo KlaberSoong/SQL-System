@@ -77,4 +77,28 @@ public final class TypeSystem {
         throw new IllegalArgumentException(
                 "cannot assign a value of type " + valueType + " to a column of type " + columnType);
     }
+
+    // 聚合函数的结果类型检查：COUNT→INT、SUM→argType（须数值）、AVG→FLOAT（须数值）、MIN/MAX→argType
+    public static ColumnType checkAggregate(String func, ColumnType argType) {
+        switch (func) {
+            case "COUNT":
+                return ColumnType.INT;
+            case "SUM":
+            case "AVG":
+                if (argType == null || !isNumeric(argType)) {
+                    throw new IllegalArgumentException(
+                            "aggregate '" + func.toLowerCase() + "' requires a numeric argument");
+                }
+                return func.equals("AVG") ? ColumnType.FLOAT : argType;
+            case "MIN":
+            case "MAX":
+                if (argType == null) {
+                    throw new IllegalArgumentException(
+                            "aggregate '" + func.toLowerCase() + "' requires an argument");
+                }
+                return argType;
+            default:
+                throw new IllegalArgumentException("unknown aggregate function '" + func + "'");
+        }
+    }
 }

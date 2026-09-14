@@ -12,10 +12,12 @@ import sql_compiler.ast.Literal;
 import sql_compiler.ast.SelectStmt;
 import sql_compiler.ast.Star;
 import sql_compiler.ast.Statement;
+import sql_compiler.plan.AggregatePlan;
 import sql_compiler.plan.FilterPlan;
 import sql_compiler.plan.PlanNode;
 import sql_compiler.plan.ProjectPlan;
 import sql_compiler.plan.SeqScanPlan;
+import sql_compiler.plan.UpdatePlan;
 import utils.ColumnType;
 import utils.Operator;
 
@@ -104,6 +106,31 @@ public class PlannerOptimizerTest {
         PlanNode pushedAfter = optimizer.optimize(pushed);
         a.checkEquals(true, pushed.toTree().indexOf("Filter") < pushed.toTree().indexOf("Project"), "优化前 Filter 在 Project 上");
         a.checkEquals(true, pushedAfter.toTree().indexOf("Project") < pushedAfter.toTree().indexOf("Filter"), "优化后 Project 在 Filter 上");
+
+        // —— UPDATE 计划 ——
+        PlanNode upd = planner.plan(new Parser(new Lexer(
+                "UPDATE emp SET age = age + 1 WHERE id = 1;").tokenize()).parseProgram().get(0));
+        a.checkEquals(true, upd instanceof UpdatePlan, "UPDATE 顶层为 UpdatePlan");
+        a.checkContains(upd.toTree(), "Update[emp", "Update 节点含表名");
+
+        // —— ORDER BY 计划：非聚合时 Sort 位于 Project 之下 ——
+        PlanNode sort = planner.plan((SelectStmt) new Parser(new Lexer(
+                "SELECT name FROM emp ORDER BY age DESC;").tokenize()).parseProgram().get(0));
+        a.checkEquals(true, sort instanceof ProjectPlan, "ORDER BY 非聚合顶层为 Project");
+        a.checkContains(sort.toTree(), "Sort[", "计划含 Sort");
+        a.checkEquals(true, sort.toTree().indexOf("Project") < sort.toTree().indexOf("Sort"), "Sort 位于 Project 之下");
+
+        // —— GROUP BY 计划 ——
+        PlanNode grp = planner.plan((SelectStmt) new Parser(new Lexer(
+                "SELECT dept, COUNT(*) FROM emp GROUP BY dept;").tokenize()).parseProgram().get(0));
+        a.checkEquals(true, grp instanceof AggregatePlan, "GROUP BY 顶层为 AggregatePlan");
+        a.checkContains(grp.toTree(), "Aggregate[groupBy=[dept]]", "Aggregate 分组键");
+
+        // —— JOIN 计划：含 LEFT JOIN 与别名 SeqScan ——
+        PlanNode join = planner.plan((SelectStmt) new Parser(new Lexer(
+                "SELECT a.name FROM emp a LEFT JOIN dept b ON a.id = b.id;").tokenize()).parseProgram().get(0));
+        a.checkContains(join.toTree(), "Join[LEFT JOIN", "计划含 LEFT JOIN");
+        a.checkContains(join.toTree(), "SeqScan[emp AS a]", "左表 SeqScan 含别名 a");
 
         return a.summary("PlannerOptimizerTest 计划与优化");
     }

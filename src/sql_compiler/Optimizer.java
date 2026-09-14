@@ -1,16 +1,22 @@
 package sql_compiler;
 
+import sql_compiler.ast.AggregateCall;
+import sql_compiler.ast.Assignment;
 import sql_compiler.ast.BinaryExpr;
 import sql_compiler.ast.ColumnRef;
 import sql_compiler.ast.Comparison;
 import sql_compiler.ast.Expr;
 import sql_compiler.ast.Literal;
 import sql_compiler.ast.UnaryExpr;
+import sql_compiler.plan.AggregatePlan;
 import sql_compiler.plan.DeletePlan;
 import sql_compiler.plan.FilterPlan;
 import sql_compiler.plan.InsertPlan;
+import sql_compiler.plan.JoinPlan;
 import sql_compiler.plan.PlanNode;
 import sql_compiler.plan.ProjectPlan;
+import sql_compiler.plan.SortPlan;
+import sql_compiler.plan.UpdatePlan;
 import utils.ColumnType;
 import utils.Operator;
 
@@ -81,6 +87,23 @@ public class Optimizer {
             List<Expr> folded = foldExprList(old);
             if (folded != old) {
                 return new ProjectPlan(folded, onlyChild(p));
+            }
+        } else if (r instanceof UpdatePlan) {
+            UpdatePlan u = (UpdatePlan) r;
+            List<Assignment> oldA = u.getAssignments();
+            List<Assignment> foldedA = foldAssignments(oldA);
+            Expr oldC = u.getCondition();
+            Expr foldedC = oldC == null ? null : foldExpr(oldC);
+            if (foldedA != oldA || foldedC != oldC) {
+                return new UpdatePlan(u.getTable(), foldedA, foldedC);
+            }
+        } else if (r instanceof JoinPlan) {
+            JoinPlan j = (JoinPlan) r;
+            if (j.getCondition() != null) {
+                Expr folded = foldExpr(j.getCondition());
+                if (folded != j.getCondition()) {
+                    return new JoinPlan(j.getLeft(), j.getRight(), j.getType(), folded);
+                }
             }
         }
         return r;
@@ -177,6 +200,23 @@ public class Optimizer {
             List<Expr> s = simplifyExprList(old);
             if (s != old) {
                 return new ProjectPlan(s, onlyChild(p));
+            }
+        } else if (r instanceof UpdatePlan) {
+            UpdatePlan u = (UpdatePlan) r;
+            List<Assignment> oldA = u.getAssignments();
+            List<Assignment> sA = simplifyAssignments(oldA);
+            Expr oldC = u.getCondition();
+            Expr sC = oldC == null ? null : simplifyExpr(oldC);
+            if (sA != oldA || sC != oldC) {
+                return new UpdatePlan(u.getTable(), sA, sC);
+            }
+        } else if (r instanceof JoinPlan) {
+            JoinPlan j = (JoinPlan) r;
+            if (j.getCondition() != null) {
+                Expr s = simplifyExpr(j.getCondition());
+                if (s != j.getCondition()) {
+                    return new JoinPlan(j.getLeft(), j.getRight(), j.getType(), s);
+                }
             }
         }
         return r;
@@ -328,6 +368,17 @@ public class Optimizer {
         if (n instanceof FilterPlan) {
             return new FilterPlan(((FilterPlan) n).getCondition(), newKids.get(0));
         }
+        if (n instanceof SortPlan) {
+            return new SortPlan(((SortPlan) n).getKeys(), newKids.get(0));
+        }
+        if (n instanceof AggregatePlan) {
+            AggregatePlan a = (AggregatePlan) n;
+            return new AggregatePlan(a.getSelectItems(), a.getGroupBy(), newKids.get(0));
+        }
+        if (n instanceof JoinPlan) {
+            JoinPlan j = (JoinPlan) n;
+            return new JoinPlan(newKids.get(0), newKids.get(1), j.getType(), j.getCondition());
+        }
         throw new IllegalStateException("unexpected node with children: " + n.getClass().getSimpleName());
     }
 
@@ -363,6 +414,38 @@ public class Optimizer {
         return result == null ? exprs : result;
     }
 
+    // 折叠赋值列表：任一值表达式变化则返回新列表，否则返回原列表
+    private List<Assignment> foldAssignments(List<Assignment> assignments) {
+        List<Assignment> result = null;
+        for (int i = 0; i < assignments.size(); i++) {
+            Assignment old = assignments.get(i);
+            Expr folded = foldExpr(old.getValue());
+            if (folded != old.getValue() && result == null) {
+                result = new ArrayList<>(assignments);
+            }
+            if (result != null) {
+                result.set(i, new Assignment(old.getColumn(), folded));
+            }
+        }
+        return result == null ? assignments : result;
+    }
+
+    // 化简赋值列表（语义同 foldAssignments，套用布尔化简）
+    private List<Assignment> simplifyAssignments(List<Assignment> assignments) {
+        List<Assignment> result = null;
+        for (int i = 0; i < assignments.size(); i++) {
+            Assignment old = assignments.get(i);
+            Expr s = simplifyExpr(old.getValue());
+            if (s != old.getValue() && result == null) {
+                result = new ArrayList<>(assignments);
+            }
+            if (result != null) {
+                result.set(i, new Assignment(old.getColumn(), s));
+            }
+        }
+        return result == null ? assignments : result;
+    }
+
     // 收集表达式里引用的所有列名（用于谓词下推的安全性判断）
     private Set<String> referencedColumns(Expr e) {
         Set<String> cols = new HashSet<>();
@@ -384,6 +467,10 @@ public class Optimizer {
             collectColumns(b.getRight(), out);
         } else if (e instanceof UnaryExpr) {
             collectColumns(((UnaryExpr) e).getOperand(), out);
+        } else if (e instanceof AggregateCall) {
+            if (((AggregateCall) e).getArg() != null) {
+                collectColumns(((AggregateCall) e).getArg(), out);
+            }
         }
     }
 

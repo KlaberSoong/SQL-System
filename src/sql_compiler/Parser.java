@@ -1,5 +1,7 @@
 package sql_compiler;
 
+import sql_compiler.ast.AggregateCall;
+import sql_compiler.ast.Assignment;
 import sql_compiler.ast.BinaryExpr;
 import sql_compiler.ast.ColumnRef;
 import sql_compiler.ast.Comparison;
@@ -7,14 +9,20 @@ import sql_compiler.ast.CreateTableStmt;
 import sql_compiler.ast.DeleteStmt;
 import sql_compiler.ast.Expr;
 import sql_compiler.ast.InsertStmt;
+import sql_compiler.ast.JoinRelation;
 import sql_compiler.ast.Literal;
+import sql_compiler.ast.OrderByItem;
+import sql_compiler.ast.Relation;
 import sql_compiler.ast.SelectStmt;
 import sql_compiler.ast.Star;
 import sql_compiler.ast.Statement;
+import sql_compiler.ast.TableRelation;
 import sql_compiler.ast.UnaryExpr;
+import sql_compiler.ast.UpdateStmt;
 import utils.ColumnDef;
 import utils.ColumnType;
 import utils.ConstSubtype;
+import utils.JoinType;
 import utils.Operator;
 import utils.SyntaxError;
 import utils.TokenType;
@@ -66,7 +74,7 @@ public class Parser {
         return stmts;
     }
 
-    // 解析单条语句并按起始关键字分派到 CREATE/INSERT/SELECT/DELETE
+    // 解析单条语句并按起始关键字分派到 CREATE/INSERT/SELECT/DELETE/UPDATE
     private Statement parseStatement() {
         Token t = peek();
         if (isKeyword(t, "CREATE")) {
@@ -81,7 +89,10 @@ public class Parser {
         if (isKeyword(t, "DELETE")) {
             return parseDelete();
         }
-        throw error(t, "CREATE", "INSERT", "SELECT", "DELETE");
+        if (isKeyword(t, "UPDATE")) {
+            return parseUpdate();
+        }
+        throw error(t, "CREATE", "INSERT", "SELECT", "DELETE", "UPDATE");
     }
 
     // 解析建表语句：CREATE TABLE identifier '(' column_def (',' column_def)* ')'
@@ -147,7 +158,7 @@ public class Parser {
         return new InsertStmt(table.getLexeme(), columns, values);
     }
 
-    // 解析查询语句：SELECT select_list FROM identifier where_clause?
+    // 解析查询语句：SELECT select_list FROM relation where_opt group_opt order_opt
     private Statement parseSelect() {
         expectKeyword("SELECT");
         List<Expr> items = new ArrayList<>();
@@ -161,9 +172,26 @@ public class Parser {
             }
         }
         expectKeyword("FROM");
-        Token table = expectIdentifier();
+        Relation from = parseRelation();
         Expr where = parseWhereClause();
-        return new SelectStmt(items, table.getLexeme(), where);
+
+        List<Expr> groupBy = null;
+        if (matchKeyword("GROUP")) {
+            expectKeyword("BY");
+            groupBy = new ArrayList<>();
+            groupBy.add(parseOr());
+            while (matchDelimiter(",")) {
+                groupBy.add(parseOr());
+            }
+        }
+
+        List<OrderByItem> orderBy = null;
+        if (matchKeyword("ORDER")) {
+            expectKeyword("BY");
+            orderBy = parseOrderBy();
+        }
+
+        return new SelectStmt(items, from, where, groupBy, orderBy);
     }
 
     // 解析删除语句：DELETE FROM identifier where_clause?
@@ -175,15 +203,100 @@ public class Parser {
         return new DeleteStmt(table.getLexeme(), where);
     }
 
+    // 解析更新语句：UPDATE identifier SET assignment (',' assignment)* where_clause?
+    private Statement parseUpdate() {
+        expectKeyword("UPDATE");
+        Token table = expectIdentifier();
+        expectKeyword("SET");
+        List<Assignment> assignments = new ArrayList<>();
+        assignments.add(parseAssignment());
+        while (matchDelimiter(",")) {
+            assignments.add(parseAssignment());
+        }
+        Expr where = parseWhereClause();
+        return new UpdateStmt(table.getLexeme(), assignments, where);
+    }
+
+    // 解析赋值项：identifier '=' or_expr
+    private Assignment parseAssignment() {
+        Token col = expectIdentifier();
+        if (!checkOperator("=")) {
+            throw error(peek(), "'='");
+        }
+        advance();
+        Expr value = parseOr();
+        return new Assignment(col.getLexeme(), value);
+    }
+
+    // 解析 FROM 关系：table_ref (',' table_ref | join_clause)*，左结合
+    private Relation parseRelation() {
+        Relation left = parseTableRef();
+        while (true) {
+            if (matchDelimiter(",")) {
+                // 逗号 = 交叉连接（内连接且无 ON）
+                left = new JoinRelation(left, parseTableRef(), JoinType.INNER, null);
+            } else if (matchKeyword("INNER")) {
+                expectKeyword("JOIN");
+                Relation right = parseTableRef();
+                expectKeyword("ON");
+                left = new JoinRelation(left, right, JoinType.INNER, parseOr());
+            } else if (matchKeyword("LEFT")) {
+                expectKeyword("JOIN");
+                Relation right = parseTableRef();
+                expectKeyword("ON");
+                left = new JoinRelation(left, right, JoinType.LEFT, parseOr());
+            } else if (matchKeyword("JOIN")) {
+                // 省略 INNER 的简写 JOIN 等价于 INNER JOIN
+                Relation right = parseTableRef();
+                expectKeyword("ON");
+                left = new JoinRelation(left, right, JoinType.INNER, parseOr());
+            } else {
+                break;
+            }
+        }
+        return left;
+    }
+
+    // 解析表引用：identifier (AS identifier | identifier)?
+    private Relation parseTableRef() {
+        Token table = expectIdentifier();
+        String alias = null;
+        if (matchKeyword("AS")) {
+            alias = expectIdentifier().getLexeme();
+        } else if (peek().getType() == TokenType.IDENTIFIER) {
+            alias = expectIdentifier().getLexeme();
+        }
+        return new TableRelation(table.getLexeme(), alias);
+    }
+
+    // 解析 ORDER BY 键列表：or_expr [ASC|DESC] (',' or_expr [ASC|DESC])*
+    private List<OrderByItem> parseOrderBy() {
+        List<OrderByItem> items = new ArrayList<>();
+        items.add(parseOrderByItem());
+        while (matchDelimiter(",")) {
+            items.add(parseOrderByItem());
+        }
+        return items;
+    }
+
+    // 解析单个排序键，默认升序
+    private OrderByItem parseOrderByItem() {
+        Expr expr = parseOr();
+        boolean asc = true;
+        if (matchKeyword("ASC")) {
+            asc = true;
+        } else if (matchKeyword("DESC")) {
+            asc = false;
+        }
+        return new OrderByItem(expr, asc);
+    }
+
     // 解析可选的 WHERE 子句：WHERE or_expr | ε（无则返回 null）
     private Expr parseWhereClause() {
         if (matchKeyword("WHERE")) {
             return parseOr();
         }
-        if (checkDelimiter(";") || peek() == eof) {
-            return null;
-        }
-        throw error(peek(), "WHERE", "';'");
+        return null;
     }
 
     // 解析逻辑或：and_expr (OR and_expr)*，左结合
@@ -284,10 +397,13 @@ public class Parser {
                 || checkDelimiter("(");
     }
 
-    // 解析原子表达式：identifier | constant | '(' or_expr ')'
+    // 解析原子表达式：identifier | constant | '(' or_expr ')' | 聚合调用
     private Expr parsePrimary() {
         Token t = peek();
         if (t.getType() == TokenType.IDENTIFIER) {
+            if (isAggregateFunction(t.getLexeme()) && isDelimiter(peek(1), "(")) {
+                return parseAggregateCall();
+            }
             return parseColumnRef();
         }
         if (t.getType() == TokenType.CONST) {
@@ -301,6 +417,28 @@ public class Parser {
             return e;
         }
         throw error(t, "IDENTIFIER", "CONST", "'('");
+    }
+
+    // 解析聚合调用：name '(' ( '*' | or_expr ) ')'
+    private Expr parseAggregateCall() {
+        Token name = expectIdentifier();
+        String func = name.getLexeme().toUpperCase();
+        expectDelimiter("(");
+        Expr arg = null;
+        if (func.equals("COUNT") && checkOperator("*")) {
+            advance(); // COUNT(*)
+        } else {
+            arg = parseOr();
+        }
+        expectDelimiter(")");
+        return new AggregateCall(func, arg);
+    }
+
+    // 判断标识符是否为聚合函数名（COUNT/SUM/AVG/MIN/MAX，大小写不敏感）
+    private static boolean isAggregateFunction(String name) {
+        String u = name.toUpperCase();
+        return u.equals("COUNT") || u.equals("SUM") || u.equals("AVG")
+                || u.equals("MIN") || u.equals("MAX");
     }
 
     // 解析列引用：identifier ('.' identifier)?，无点号时 table 为 null
@@ -333,6 +471,12 @@ public class Parser {
         return index < tokens.size() ? tokens.get(index) : eof;
     }
 
+    // 预读相对当前位置偏移 offset 处的 token，越界返回 EOF 哨兵
+    private Token peek(int offset) {
+        int idx = index + offset;
+        return idx < tokens.size() ? tokens.get(idx) : eof;
+    }
+
     // 消费当前 token 并前移下标，越界返回 EOF 哨兵
     private Token advance() {
         if (index < tokens.size()) {
@@ -363,6 +507,11 @@ public class Parser {
     // 预读判断当前 token 是否为指定分隔符
     private boolean checkDelimiter(String d) {
         Token t = peek();
+        return t.getType() == TokenType.DELIMITER && t.getLexeme().equals(d);
+    }
+
+    // 判断指定 token 是否为指定分隔符
+    private boolean isDelimiter(Token t, String d) {
         return t.getType() == TokenType.DELIMITER && t.getLexeme().equals(d);
     }
 

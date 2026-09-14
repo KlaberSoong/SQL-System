@@ -2,18 +2,24 @@ package tests;
 
 import sql_compiler.Lexer;
 import sql_compiler.Parser;
+import sql_compiler.ast.AggregateCall;
+import sql_compiler.ast.Assignment;
 import sql_compiler.ast.BinaryExpr;
 import sql_compiler.ast.ColumnRef;
 import sql_compiler.ast.Comparison;
 import sql_compiler.ast.CreateTableStmt;
 import sql_compiler.ast.DeleteStmt;
 import sql_compiler.ast.InsertStmt;
+import sql_compiler.ast.JoinRelation;
 import sql_compiler.ast.Literal;
+import sql_compiler.ast.OrderByItem;
 import sql_compiler.ast.SelectStmt;
 import sql_compiler.ast.Star;
 import sql_compiler.ast.Statement;
 import sql_compiler.ast.UnaryExpr;
+import sql_compiler.ast.UpdateStmt;
 import utils.ColumnType;
+import utils.JoinType;
 import utils.Operator;
 import utils.SyntaxError;
 
@@ -127,6 +133,42 @@ public class ParserTest {
         ColumnRef cr = (ColumnRef) ((SelectStmt) parse("SELECT s.id FROM s;").get(0)).getSelectItems().get(0);
         a.checkEquals("s", cr.getTable(), "列引用表前缀");
         a.checkEquals("id", cr.getColumn(), "列引用列名");
+
+        // —— UPDATE ——
+        UpdateStmt upd = (UpdateStmt) parse("UPDATE emp SET age = age + 1, dept = 'X' WHERE id = 1;").get(0);
+        a.checkEquals("emp", upd.getTable(), "UPDATE 表名");
+        a.checkEquals(2, upd.getAssignments().size(), "UPDATE 两个赋值");
+        Assignment as = upd.getAssignments().get(0);
+        a.checkEquals("age", as.getColumn(), "赋值列 age");
+        a.checkEquals(true, as.getValue() instanceof BinaryExpr, "赋值值为算术表达式");
+        a.checkEquals(true, upd.getWhere() instanceof Comparison, "UPDATE 条件");
+
+        // —— JOIN：INNER / LEFT / 逗号交叉 ——
+        JoinRelation inner = (JoinRelation) ((SelectStmt) parse(
+                "SELECT * FROM emp a INNER JOIN dept b ON a.id = b.id;").get(0)).getFrom();
+        a.checkEquals(JoinType.INNER, inner.getType(), "INNER JOIN 类型");
+        a.checkEquals(true, inner.getOn() instanceof Comparison, "JOIN ON 条件");
+        JoinRelation left = (JoinRelation) ((SelectStmt) parse(
+                "SELECT * FROM emp a LEFT JOIN dept b ON a.id = b.id;").get(0)).getFrom();
+        a.checkEquals(JoinType.LEFT, left.getType(), "LEFT JOIN 类型");
+        JoinRelation cross = (JoinRelation) ((SelectStmt) parse("SELECT * FROM emp, dept;").get(0)).getFrom();
+        a.checkEquals(JoinType.INNER, cross.getType(), "逗号连接为 INNER");
+        a.checkEquals(null, cross.getOn(), "逗号连接无 ON");
+
+        // —— GROUP BY + 聚合 ——
+        SelectStmt group = (SelectStmt) parse("SELECT dept, COUNT(*) FROM emp GROUP BY dept;").get(0);
+        a.checkEquals(1, group.getGroupBy().size(), "GROUP BY 单键");
+        a.checkEquals(true, group.getSelectItems().get(1) instanceof AggregateCall, "COUNT(*) 为聚合调用");
+        AggregateCall cnt = (AggregateCall) group.getSelectItems().get(1);
+        a.checkEquals("COUNT", cnt.getFunc(), "聚合函数名 COUNT");
+        a.checkEquals(null, cnt.getArg(), "COUNT(*) 参数为 null");
+
+        // —— ORDER BY ——
+        SelectStmt ord = (SelectStmt) parse("SELECT * FROM emp ORDER BY age DESC, id ASC;").get(0);
+        a.checkEquals(2, ord.getOrderBy().size(), "ORDER BY 双键");
+        OrderByItem first = ord.getOrderBy().get(0);
+        a.checkEquals(false, first.isAsc(), "DESC 键 asc=false");
+        a.checkEquals(true, ord.getOrderBy().get(1).isAsc(), "ASC 键 asc=true");
 
         // —— 边界：大小写混用 / 多语句 / 末尾分号 ——
         a.checkEquals(1, parse("sElEcT * fRoM student;").size(), "整句大小写混用");
