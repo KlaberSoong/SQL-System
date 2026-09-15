@@ -74,6 +74,11 @@ public class StorageEngine {
                     + " values, but got " + values.size());
         }
         byte[] bytes = Serializer.encodeRow(values, toTypes(schema));
+        if (bytes.length > Page.maxRowBytes()) {
+            // 先判大小再分配页：否则每次失败的插入都会白分配一页且不回收，
+            // 文件无上界地增长（实测连续 3 次失败 1->2->3->4 页）。
+            throw new DbException("row too large to fit in a page");
+        }
         FileManager fm = fileManager(table);
         BufferPool bp = bufferPool(table);
 
@@ -173,8 +178,17 @@ public class StorageEngine {
         BufferPool bp = bufferPool(table);
         List<ColumnType> types = toTypes(requireSchema(table));
 
-        // 1. 清空所有数据页
+        // 1. 清空所有数据页（跳过空闲页）
+        //    空闲页在释放时已由 FileManager 清空并写盘，其页头 nextPageId 存的是空闲链的后继；
+        //    缓冲池里不会再有该页释放前的陈旧镜像——FileManager.freePage 已经发过页变更通知，
+        //    池把副本作废了。这里的 isFreePage 跳过是**纵深防御**：
+        //    即使某个池漏收通知、手里还留着陈旧镜像（nextPageId = -1），
+        //    不 clear + markDirty 就不会让随后的 flushAll 把这个 -1 写回磁盘、
+        //    把空闲链从该页起整段截断（实测曾让 13 个空闲页在一次 DELETE 后只剩 2 个）。
         for (int id = 1; id < fm.pageCount(); id++) {
+            if (fm.isFreePage(id)) {
+                continue;
+            }
             Page p = bp.getPage(id);
             if (p != null) {
                 p.clear();
@@ -198,6 +212,10 @@ public class StorageEngine {
         }
 
         // 3. 先落盘已清空/重写的内容，再回收尾部空页（空闲页链表由 FileManager 直接读写磁盘）
+        //    **顺序是承载正确性的**，不只是为了链完整：下面的 freePage 会通知缓冲池作废副本，
+        //    而 invalidate 只丢弃、不回写；所以任何还没落盘的改动必须在这一步之前写完。
+        //    若把 flushAll 挪到回收之后，尾部那些"已清空但还没落盘"的页会被 freePage
+        //    作废掉，改动无声丢失。
         bp.flushAll();
         for (int id = fm.pageCount() - 1; id > lastUsed; id--) {
             fm.freePage(id);

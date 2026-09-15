@@ -9,6 +9,9 @@ import utils.PageType;
  * + 行数据（自前向后追加）+ 槽目录（自页尾向前增长）。
  */
 public class Page {
+    /**
+     * 本页的身份：它属于文件里的第几页。构造时定下、此后不变，是页号的**唯一权威**。
+     */
     private final int pageId;
     private final byte[] data;
 
@@ -28,12 +31,22 @@ public class Page {
         this.data = data;
     }
 
-    // 读取页号。
+    /**
+     * 读取页号：返回本页的身份（构造时传入的那个），不读页头。
+     *
+     * <p>页头偏移 0 处的副本是**磁盘格式的自我描述**，只用于落盘后自查，
+     * 不参与寻址。两者必须一致，但一旦不一致（例如 .dat 被外部改动过），
+     * 也要让寻址跟随身份，否则 {@link FileManager#writePage} 会按页头里的
+     * 页号写到另一个偏移上去——把别的页（包括第 0 页元数据页）覆盖掉。
+     */
     public int getPageId() {
-        return getInt(0);
+        return pageId;
     }
 
-    // 设置页号。
+    /**
+     * 把页号写进页头（磁盘格式的自我描述）。注意这不改变 {@link #getPageId()} 的身份：
+     * 身份是构造时定下的，本方法只负责让落盘后的字节能自我描述。
+     */
     public void setPageId(int v) {
         putInt(0, v);
     }
@@ -94,6 +107,12 @@ public class Page {
     public boolean hasSpace(int rowLength) {
         return getFreeSpaceOffset() + rowLength
                 <= Constants.PAGE_SIZE - SLOT_SIZE * (getSlotCount() + 1);
+    }
+
+    // 单页能容纳的最大行字节数（空页：页头 + 1 个槽目录项）。
+    // 供调用方在“分配页之前”预判行是否放得下，避免为注定写不进去的行白分配一页。
+    public static int maxRowBytes() {
+        return Constants.PAGE_SIZE - Constants.HEADER_SIZE - SLOT_SIZE;
     }
 
     // 按槽下标读取一行字节。
