@@ -222,12 +222,11 @@ java -cp out tests.InterfaceTest   # 或 test.bat（已并入 AllTests）
 
 ## 三、三人分工（并行开发）
 
-| 成员 | 负责 | 关键文件 |
+| 成员 | 负责 | 关键文件（含测试） |
 |------|------|----------|
-| 人 A | 编译器前端（词法 + 语法） | `Lexer.java`、`Parser.java`、`ast/*`、`Token.java` |
-| 人 B | 存储系统 | `storage/Page.java`、`BufferPool.java`、`FileManager.java` |
-| 人 C | 编译器后端（语义 + 计划 + 优化） | `SemanticAnalyzer.java`、`Planner.java`、`Optimizer.java`、`Catalog.java`、`plan/*` |
-| 合流 | 引擎 + CLI + 测试 | `engine/*`、`cli/Main.java`、`tests/*` |
+| SQL 编译器 | 编译器全链路 3.1–3.6：词法 → 语法 → 语义 → 类型系统 → 计划生成 → 规则式优化；另负责 NULL 三值逻辑 / 新增类型（DATE/DECIMAL/CHAR/TEXT）的端到端验证 | `Lexer.java`、`Parser.java`、`SemanticAnalyzer.java`、`TypeSystem.java`、`Planner.java`、`Optimizer.java`、`Catalog.java`、`ast/*`、`plan/*`、`Token.java`；`LexerTest`、`ParserTest`、`SemanticTest`、`PlannerOptimizerTest`、`NullAndTypesTest` |
+| 存储系统 | 页式存储 + 缓冲池 + 文件管理 | `storage/Page.java`、`BufferPool.java`、`FileManager.java`；`StorageTest`、`PagingTest`、`CacheTest` |
+| 数据库引擎 | 引擎 + CLI + 集成测试 | `engine/*`、`cli/Main.java`、`cli/CmdWindow.java`；`InterfaceTest`、`EngineTest`、`EndToEndTest`、`AdvancedSqlTest`、`FuzzTest` |
 
 **同步方式**：接口契约（`utils/*`、`ast/*`、`plan/*`、`Serializer`、`Page` 页头布局）已在本仓库定死；各自开发时只改自己模块的方法体，接口变更需三方确认。
 
