@@ -87,6 +87,9 @@ public class Main {
      * <p>供终端 REPL 与 {@link CmdWindow} 共用：词法 → 语法 → 语义 → 计划 → 优化 → 执行，
      * 逐条语句执行并累积结果；任何 {@link DbException} 被捕获后把错误消息追加到结果末尾。
      *
+     * <p><b>语句级原子性：</b>一条语句失败时，它在语义分析阶段对 {@link Catalog}（编译期符号表）
+     * 留下的副作用会被回滚（见 {@link Catalog#snapshot()}），使符号表与存储引擎不会失配。
+     *
      * @return 结果字符串（多条语句结果之间以换行分隔；源为空时返回空串）
      */
     public static String executeAndFormat(String sql, StorageEngine storage,
@@ -99,20 +102,37 @@ public class Main {
             }
             List<Statement> statements = new Parser(tokens).parseProgram();
             for (Statement stmt : statements) {
-                new SemanticAnalyzer(catalog).analyze(Collections.singletonList(stmt));
-                PlanNode plan = new Planner().plan(stmt);
-                plan = new Optimizer().optimize(plan);
-                Object result = new Executor(storage, catalogManager).execute(plan);
-                if (out.length() > 0) {
-                    out.append('\n');
+                // 执行前取符号表快照：语义分析阶段会把 CREATE TABLE 注册进 Catalog，
+                // 而真正建表在执行阶段才可能失败（例如数据文件已存在但目录里没有这张表）。
+                // 失败时不回滚的话，符号表就留下一个"编译期认为存在、引擎里并不存在"的表：
+                // 之后同一会话重建它会被误报为 DuplicateTable，INSERT/SELECT 又从引擎层报
+                // "table does not exist"——两个错误互相矛盾，且这张表在整个会话内再也建不出来。
+                Catalog.Snapshot before = catalog.snapshot();
+                try {
+                    new SemanticAnalyzer(catalog).analyze(Collections.singletonList(stmt));
+                    PlanNode plan = new Planner().plan(stmt);
+                    plan = new Optimizer().optimize(plan);
+                    Object result = new Executor(storage, catalogManager).execute(plan);
+                    if (out.length() > 0) {
+                        out.append('\n');
+                    }
+                    out.append(formatResult(result));
+                } catch (DbException e) {
+                    catalog.restore(before);
+                    out.append(e.getMessage());
+                    break;      // 与原行为一致：一条语句失败后，其后的语句不再执行
+                } catch (RuntimeException e) {
+                    // 兜底：非 DbException 的运行时异常（如类型转换失败）也要显示出来，
+                    // 避免在 javaw 无控制台的 GUI 下静默无响应。
+                    catalog.restore(before);
+                    out.append("[internal error] ").append(e.toString());
+                    break;
                 }
-                out.append(formatResult(result));
             }
         } catch (DbException e) {
+            // 词法/语法/计划阶段的错误：此时还没有任何语句被真正执行，符号表无需回滚
             out.append(e.getMessage());
         } catch (RuntimeException e) {
-            // 兜底：非 DbException 的运行时异常（如类型转换失败）也要显示出来，
-            // 避免在 javaw 无控制台的 GUI 下静默无响应。
             out.append("[internal error] ").append(e.toString());
         }
         return out.toString();

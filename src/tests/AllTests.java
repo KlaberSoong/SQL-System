@@ -14,6 +14,9 @@ public class AllTests {
         failed += SemanticTest.run();
         failed += PlannerOptimizerTest.run();
         failed += StorageTest.run();
+        failed += PagingTest.run();
+        failed += CacheTest.run();
+        failed += InterfaceTest.run();
         failed += EngineTest.run();
         failed += EndToEndTest.run();
         failed += AdvancedSqlTest.run();
