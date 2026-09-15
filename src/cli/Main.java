@@ -34,7 +34,7 @@ public class Main {
     public static void main(String[] args) throws Exception {
         StorageEngine storage = new StorageEngine(Constants.DEFAULT_DATA_DIR);
         CatalogManager catalogManager = new CatalogManager(storage);
-        Catalog catalog = catalogManager.loadCatalog();
+        Catalog catalog = loadCatalogOrExit(catalogManager, args);
 
         if (args.length > 0 && ("--gui".equals(args[0]) || "-g".equals(args[0]))) {
             SwingUtilities.invokeLater(() -> new CmdWindow(storage, catalogManager, catalog).show());
@@ -65,6 +65,28 @@ public class Main {
                 break;
             }
             System.out.println(executeAndFormat(line, storage, catalogManager, catalog));
+        }
+    }
+
+    /**
+     * 装载系统目录；数据文件格式版本不匹配这类致命错误在这里转成一条可读提示并退出。
+     *
+     * <p>必须有这个出口：启动路径上任何未捕获异常都会让进程静默死掉，而 {@code run.vbs}
+     * 是用 {@code javaw} 隐藏控制台启动 GUI 的，堆栈会被丢掉，用户看到的是"双击没反应"。
+     * 所以这里既写 stderr（REPL 用），也弹窗（GUI 用），并以非零码退出。
+     */
+    private static Catalog loadCatalogOrExit(CatalogManager catalogManager, String[] args) {
+        try {
+            return catalogManager.loadCatalog();
+        } catch (DbException e) {
+            String msg = "MiniDB 无法启动：" + e.getMessage();
+            System.err.println(msg);
+            if (args.length > 0 && ("--gui".equals(args[0]) || "-g".equals(args[0]))) {
+                javax.swing.JOptionPane.showMessageDialog(null, msg, "MiniDB 启动失败",
+                        javax.swing.JOptionPane.ERROR_MESSAGE);
+            }
+            System.exit(1);
+            return null;    // 不会执行到：System.exit 不返回
         }
     }
 

@@ -33,6 +33,8 @@ import java.util.Set;
  *   <li>页面读取：越界页号、页头往返、槽行按序读回、缓冲池命中统计</li>
  *   <li>页面写入：行往返、页写满边界、超大行、脏页落盘与淘汰写回</li>
  *   <li>数据恢复：跨"重启"（重开 FileManager）后页数/行数据/空闲链完整，以及反复增删不破坏空闲链</li>
+ *   <li>格式版本号：版本号落盘的内容与位置、跨重启／释放／复用后仍在、版本失配在打开文件时即被
+ *       拒绝（只报不修、且校验先于解空闲链）</li>
  * </ol>
  *
  * <p>运行方式：{@code java -cp out tests.PagingTest}（已并入 {@link AllTests}）。
@@ -56,6 +58,7 @@ public class PagingTest {
         sectionRead(a);
         sectionWrite(a);
         sectionRecovery(a);
+        sectionFormatVersion(a);
         return a.summary("PagingTest 页式存储管理");
     }
 
@@ -515,6 +518,241 @@ public class PagingTest {
         }
     }
 
+    // ================= 六、文件格式版本号 =================
+
+    /**
+     * 检查数据文件是否带格式版本号，以及版本不匹配时是否在**打开文件的瞬间**被拒绝。
+     *
+     * <p>钉的是一条真实发生过的静默失配：{@code Serializer} 给每个值加了 1 字节 NULL 标志后，
+     * INT 行由 4 字节变成 5 字节，而旧的 {@code .dat} 仍被当作合法文件打开，
+     * 一路走到某一行解码才抛 {@code decodeRow failed}——错误点离病因已经很远了。
+     * 有版本号之后，这种失配必须在 {@code new FileManager(...)} 就炸掉，并且报出能照做的信息。
+     */
+    private static void sectionFormatVersion(Assert a) {
+        // 0 是留给"无版本号的旧文件"的哨兵值。它一旦被当成合法版本，整个机制就形同虚设，
+        // 所以这条元断言要挡在其余用例前面。
+        a.checkTrue(Constants.FILE_FORMAT_VERSION > 0,
+                "[版本] 当前格式版本号是正整数（0 专门表示无版本号的旧文件，不可占用）");
+
+        // 由本程序建出的页自己带版本号
+        a.checkEquals(Constants.FILE_FORMAT_VERSION, new Page(1).getFormatVersion(),
+                "[版本] 新建页带当前格式版本号");
+
+        File dir = TestFiles.tempDir("paging-version");
+        try {
+            FileManager fm = new FileManager(dir.getAbsolutePath(), "v.dat");
+            fm.init();
+
+            // 直接读原始字节核对落盘内容，不经过 Page 的读写接口自证
+            byte[] meta = readRawPage(dir, "v.dat", 0);
+            a.checkEquals(Constants.FILE_FORMAT_VERSION, readInt(meta, 20),
+                    "[版本] 元数据页页头偏移 20 落盘的就是当前版本号");
+            // 期望字节按大端从 int 展开，不能写成 new byte[]{0,0,0,(byte) v}：
+            // 那等于断言"版本号只占 1 字节"，v 一过 255 就被窄化截断成全零，
+            // 落盘的字节完全正确却报错（实测把版本号设成 256 时，唯一失败的就是这条）。
+            int v = Constants.FILE_FORMAT_VERSION;
+            a.check(Arrays.equals(
+                            new byte[]{(byte) (v >>> 24), (byte) (v >>> 16), (byte) (v >>> 8), (byte) v},
+                            Arrays.copyOfRange(meta, 20, 24)),
+                    "[版本] 版本号按大端 4 字节存放");
+
+            int p1 = fm.allocatePage();
+            a.checkEquals(Constants.FILE_FORMAT_VERSION, readInt(readRawPage(dir, "v.dat", p1), 20),
+                    "[版本] 分配出的数据页同样带版本号");
+
+            // 直接重开，不走 reopenWithin：那个带看门狗的包装把"抛异常"也归入"没超时"，
+            // 于是重开失败时它照样记 PASS，内层断言又被 if (reopened != null) 跳过——
+            // 功能坏掉反而全绿，等于没测。这个文件的空闲链是健康的，重开没有卡死风险，
+            // 不需要看门狗；这里若抛异常，异常会逸出套件，本身就是失败信号。
+            FileManager reopened = new FileManager(dir.getAbsolutePath(), "v.dat");
+            a.checkEquals(Constants.FILE_FORMAT_VERSION, reopened.readPage(0).getFormatVersion(),
+                    "[版本] 版本号跨重启保持");
+
+            // 释放会 clear() 并改写这一页；复用又改写一次链头。版本号都不该被抹掉，
+            // 否则一个正常使用的库跑一段时间后自己就把自己判成"格式不匹配"。
+            fm.freePage(p1);
+            a.checkEquals(Constants.FILE_FORMAT_VERSION, readInt(readRawPage(dir, "v.dat", p1), 20),
+                    "[版本] 页被释放清空后版本号仍在（clear 只复位槽数与空闲偏移）");
+            int reused = fm.allocatePage();
+            a.checkEquals(p1, reused, "[版本] 复用的正是刚释放的那一页");
+            a.checkEquals(Constants.FILE_FORMAT_VERSION, readInt(readRawPage(dir, "v.dat", reused), 20),
+                    "[版本] 复用空闲页后版本号仍在");
+        } finally {
+            TestFiles.deleteRecursively(dir);
+        }
+
+        // ---- 版本不匹配：必须拒绝装载，且只报不修 ----
+        File bad = TestFiles.tempDir("paging-version-bad");
+        try {
+            FileManager fm = new FileManager(bad.getAbsolutePath(), "bad.dat");
+            fm.init();
+            fm.allocatePage();
+            pokeFormatVersion(bad, "bad.dat", 0, 999);
+            byte[] before = readRawPage(bad, "bad.dat", 0);
+
+            DbException e = a.checkThrows(DbException.class,
+                    () -> new FileManager(bad.getAbsolutePath(), "bad.dat"),
+                    "[版本] 版本号为 999 的文件被拒绝打开");
+            if (e != null) {
+                // needle 一律带上前后文，不用 "999" / "1" 这种裸数字：报错里本来就拼着临时目录路径
+                // （minidb-paging-version-bad-<nanoTime>\bad.dat），路径里的数字会让裸数字 needle
+                // 与报错内容无关地命中，断言看着在测其实什么都没测。
+                a.checkContains(e.getMessage(), "格式版本为 999",
+                        "[版本] 报错里带上磁盘上的实际版本号");
+                a.checkContains(e.getMessage(), "本程序需要 " + Constants.FILE_FORMAT_VERSION,
+                        "[版本] 报错里带上程序需要的版本号");
+                a.checkContains(e.getMessage(), "bad.dat", "[版本] 报错里带上文件名（便于定位）");
+            }
+            a.check(Arrays.equals(before, readRawPage(bad, "bad.dat", 0)),
+                    "[版本] 拒绝装载后整页字节一个未动（不把读不懂的文件悄悄伪装成读得懂）");
+        } finally {
+            TestFiles.deleteRecursively(bad);
+        }
+
+        // ---- 无版本号的旧文件（保留字段为 0）：同样拒绝 ----
+        File legacy = TestFiles.tempDir("paging-version-legacy");
+        try {
+            FileManager fm = new FileManager(legacy.getAbsolutePath(), "old.dat");
+            fm.init();
+            pokeFormatVersion(legacy, "old.dat", 0, 0);
+
+            DbException e = a.checkThrows(DbException.class,
+                    () -> new FileManager(legacy.getAbsolutePath(), "old.dat"),
+                    "[版本] 页头保留字段为 0 的旧文件被拒绝打开");
+            if (e != null) {
+                a.checkContains(e.getMessage(), "格式版本为 0",
+                        "[版本] 报错里点明磁盘上的版本是 0");
+                a.checkContains(e.getMessage(), "之前",
+                        "[版本] 报错里说明 0 的含义是：写于引入版本号之前");
+            }
+        } finally {
+            TestFiles.deleteRecursively(legacy);
+        }
+
+        // ---- 校验必须发生在解空闲链之前 ----
+        // 造一个"空闲链越界"的文件：loadFreeList 一跑就会把链尾的 nextPageId 改写成 -1（写盘）。
+        // 同时把版本号改坏。若校验晚于解链，这次失败的打开已经改动了磁盘。
+        File order = TestFiles.tempDir("paging-version-order");
+        try {
+            FileManager fm = new FileManager(order.getAbsolutePath(), "o.dat");
+            fm.init();
+            int q1 = fm.allocatePage();
+            fm.allocatePage();
+            Page link = fm.readPage(q1);
+            link.setNextPageId(99);         // 越界页号：loadFreeList 会截断到 -1
+            fm.writePage(link);
+            pokeInt(order, "o.dat", 0, 16, q1);     // 第 0 页链头 -> q1
+            pokeFormatVersion(order, "o.dat", 0, 999);
+
+            a.checkThrows(DbException.class,
+                    () -> new FileManager(order.getAbsolutePath(), "o.dat"),
+                    "[版本] 版本与链路同时损坏时报的是版本错");
+            a.checkEquals(99, readInt(readRawPage(order, "o.dat", q1), 16),
+                    "[版本] 校验先于解链：被拒绝的打开没有顺手把坏链截断（磁盘未被改动）");
+        } finally {
+            TestFiles.deleteRecursively(order);
+        }
+
+        // ---- 版本权威在第 0 页：数据页上的版本字段不参与判定，也不会被改写 ----
+        File authority = TestFiles.tempDir("paging-version-authority");
+        try {
+            FileManager fm = new FileManager(authority.getAbsolutePath(), "a.dat");
+            fm.init();
+            int d1 = fm.allocatePage();
+            pokeFormatVersion(authority, "a.dat", d1, 777);
+
+            FileManager again = new FileManager(authority.getAbsolutePath(), "a.dat");
+            a.checkEquals(Constants.FILE_FORMAT_VERSION, again.readPage(0).getFormatVersion(),
+                    "[版本] 数据页上的版本字段不影响打开（权威是第 0 页元数据页）");
+            a.checkEquals(777, readInt(readRawPage(authority, "a.dat", d1), 20),
+                    "[版本] 被改坏的数据页版本字段原样保留，不被悄悄修好");
+        } finally {
+            TestFiles.deleteRecursively(authority);
+        }
+
+        // ---- 长度不是整页的损坏文件：拒绝，不能当成空文件重建 ----
+        // 页数是按长度整除出来的，所以半页文件的 pageCount 也是 0。只看页数会把它当成
+        // "空文件"放过，随后 init() 覆写第 0 页把表重建——而在此之前 SELECT 只会静默返回 0 行。
+        // 这条是外部核查捞出来的：原先的门槛设在 pageCount > 0 上，正好漏掉最现实的这种损坏。
+        File half = TestFiles.tempDir("paging-version-half");
+        try {
+            // 关键：这些畸形文件全部从**合法页 0 的字节**派生，所以版本字段是对的，
+            // "长度不是整页"是它们身上唯一的毛病。否则版本检查会先一步拒绝它们，
+            // 断言通过了却不是因为长度检查——把长度检查整个删掉也照样通过（实测就是如此）。
+            byte[] validPage0 = new Page(0).getRawData();
+
+            byte[] halfPage = Arrays.copyOf(validPage0, 100);
+            writeRawFile(new File(half, "half.dat"), halfPage);
+            a.checkEquals(100L, new File(half, "half.dat").length(), "[版本] 已造出 100 字节的半页文件");
+
+            DbException e = a.checkThrows(DbException.class,
+                    () -> new FileManager(half.getAbsolutePath(), "half.dat"),
+                    "[版本] 不足一页的文件被拒绝打开（不当成空文件）");
+            if (e != null) {
+                a.checkContains(e.getMessage(), "长度为 100 字节",
+                        "[版本] 半页文件报错里带上实际字节数");
+                a.checkContains(e.getMessage(), "页大小 " + Constants.PAGE_SIZE,
+                        "[版本] 半页文件报错里带上页大小");
+                a.checkContains(e.getMessage(), "half.dat", "[版本] 半页文件报错里带上文件名");
+                a.checkContains(e.getMessage(), "整数倍",
+                        "[版本] 半页文件报的是长度不是整页，而不是版本错");
+            }
+            a.checkEquals(100L, new File(half, "half.dat").length(),
+                    "[版本] 拒绝后文件长度未被改动（不补成整页、不截断）");
+            a.check(Arrays.equals(halfPage, readWholeFile(new File(half, "half.dat"))),
+                    "[版本] 拒绝后半页字节一个未动");
+
+            // 超过一页但带半页尾巴：pageCount > 0，若只判"不足一页"就会漏掉这一种
+            byte[] withTail = Arrays.copyOf(validPage0, Constants.PAGE_SIZE + 100);
+            writeRawFile(new File(half, "tail.dat"), withTail);
+            DbException te = a.checkThrows(DbException.class,
+                    () -> new FileManager(half.getAbsolutePath(), "tail.dat"),
+                    "[版本] 一整页加半页尾巴的文件同样被拒绝");
+            if (te != null) {
+                a.checkContains(te.getMessage(), "长度为 " + withTail.length + " 字节",
+                        "[版本] 带尾巴的文件报的是长度错（版本字段本身是对的）");
+            }
+            a.checkEquals((long) withTail.length, new File(half, "tail.dat").length(),
+                    "[版本] 带尾巴的文件被拒绝后长度未变");
+
+            // 边界：差 1 字节不足一页也拒绝
+            writeRawFile(new File(half, "just.dat"),
+                    Arrays.copyOf(validPage0, Constants.PAGE_SIZE - 1));
+            DbException je = a.checkThrows(DbException.class,
+                    () -> new FileManager(half.getAbsolutePath(), "just.dat"),
+                    "[版本] 差 1 字节不足一页也拒绝");
+            if (je != null) {
+                a.checkContains(je.getMessage(), "长度为 4095 字节",
+                        "[版本] 差 1 字节的文件报的是长度错（版本字段本身是对的）");
+            }
+
+            // 对照：正好一页且版本正确 —— 必须放行
+            byte[] exact = validPage0;
+            writeRawFile(new File(half, "exact.dat"), exact);
+            // 对照：正好一页且版本正确的文件必须能正常打开。这里直接构造——若它抛异常，
+            // 异常会逸出套件（Assert 从不 catch），本身就是一个失败信号。
+            FileManager exactFm = new FileManager(half.getAbsolutePath(), "exact.dat");
+            a.checkEquals(1, exactFm.pageCount(), "[版本] 对照：正好一页的文件正常打开，页数为 1");
+            a.checkEquals(Constants.FILE_FORMAT_VERSION, exactFm.readPage(0).getFormatVersion(),
+                    "[版本] 对照：正常文件读回的版本号正确");
+        } finally {
+            TestFiles.deleteRecursively(half);
+        }
+
+        // ---- 空文件与新建文件不触发校验（尚无页头可校验） ----
+        File empty = TestFiles.tempDir("paging-version-empty");
+        try {
+            FileManager fm = new FileManager(empty.getAbsolutePath(), "e.dat");
+            a.checkEquals(0, fm.pageCount(), "[版本] 不存在的文件页数为 0");
+            int id = fm.allocatePage();
+            a.checkEquals(1, id, "[版本] 空文件可直接分配出第 1 页（未因缺版本号被拒）");
+            a.checkEquals(Constants.FILE_FORMAT_VERSION, readInt(readRawPage(empty, "e.dat", 0), 20),
+                    "[版本] 首次分配顺带建出的第 0 页带当前版本号");
+        } finally {
+            TestFiles.deleteRecursively(empty);
+        }
+    }
+
     // ================= 工具 =================
 
     /** 把整数编码成一行的字节（INT 列）。 */
@@ -531,6 +769,62 @@ public class PagingTest {
             }
         }
         return list;
+    }
+
+    /** 绕过所有接口，直接从磁盘上取一页的原始字节（不经过 Page 的读写自证）。 */
+    private static byte[] readRawPage(File dir, String fileName, int pageId) {
+        byte[] buf = new byte[Constants.PAGE_SIZE];
+        try (RandomAccessFile raf = new RandomAccessFile(new File(dir, fileName), "r")) {
+            raf.seek((long) pageId * Constants.PAGE_SIZE);
+            raf.readFully(buf);
+        } catch (Exception e) {
+            throw new DbException("raw read of page " + pageId + " failed: " + e.getMessage(), e);
+        }
+        return buf;
+    }
+
+    /**
+     * 把整个文件读成字节数组。长度不足一页的文件要用它——{@link #readRawPage} 会整页 readFully，
+     * 在半页文件上直接抛 EOF。
+     */
+    private static byte[] readWholeFile(File f) {
+        byte[] buf = new byte[(int) f.length()];
+        try (RandomAccessFile raf = new RandomAccessFile(f, "r")) {
+            raf.readFully(buf);
+        } catch (Exception e) {
+            throw new DbException("raw read of " + f + " failed: " + e.getMessage(), e);
+        }
+        return buf;
+    }
+
+    /** 直接写一个原始文件（用于造半页 / 损坏的文件，绕过 FileManager 的所有写路径）。 */
+    private static void writeRawFile(File f, byte[] content) {
+        try (RandomAccessFile raf = new RandomAccessFile(f, "rw")) {
+            raf.setLength(0);
+            raf.write(content);
+        } catch (Exception e) {
+            throw new DbException("raw write of " + f + " failed: " + e.getMessage(), e);
+        }
+    }
+
+    /** 篡改磁盘上某页页头里的一个 4 字节字段（大端写入）。 */
+    private static void pokeInt(File dir, String fileName, int pageId, int offset, int value) {
+        byte[] buf = readRawPage(dir, fileName, pageId);
+        buf[offset] = (byte) (value >>> 24);
+        buf[offset + 1] = (byte) (value >>> 16);
+        buf[offset + 2] = (byte) (value >>> 8);
+        buf[offset + 3] = (byte) value;
+        try (RandomAccessFile raf = new RandomAccessFile(new File(dir, fileName), "rw")) {
+            raf.seek((long) pageId * Constants.PAGE_SIZE);
+            raf.write(buf);
+        } catch (Exception e) {
+            throw new DbException("poke page " + pageId + " failed: " + e.getMessage(), e);
+        }
+    }
+
+    /** 篡改磁盘上某页页头里的格式版本号（偏移 20）。 */
+    private static void pokeFormatVersion(File dir, String fileName, int pageId, int value) {
+        pokeInt(dir, fileName, pageId, 20, value);
     }
 
     /** 数据文件当前的页数（按文件长度推算，绕过 FileManager 的内存快照）。 */
