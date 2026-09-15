@@ -255,9 +255,12 @@ public class PagingTest {
         a.checkEquals(1, p.getSlotCount(), "[写入] 写入后行数 +1");
         a.check(p.getFreeSpaceOffset() > Constants.HEADER_SIZE, "[写入] 写入后空闲偏移前移");
 
-        // 页写满边界：每行占 4 字节数据 + 4 字节槽目录
+        // 页写满边界：每行占 row.length 字节数据 + 4 字节槽目录。
+        // 行宽度取自 row 本身而不是写死 4——序列化格式会演进（例如加入 NULL 支持后，
+        // 每个值前多了一字节 null 标志，INT 行从 4 字节变成 5 字节），
+        // 写死的话格式一改就会在这里误报，而这条断言要钉的是"页边界"不是"编码宽度"。
         Page full = new Page(2);
-        int expected = (Constants.PAGE_SIZE - Constants.HEADER_SIZE) / 8;
+        int expected = (Constants.PAGE_SIZE - Constants.HEADER_SIZE) / (row.length + 4);
         int written = 0;
         while (full.writeRow(row)) {
             written++;

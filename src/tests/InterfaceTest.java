@@ -114,7 +114,12 @@ public class InterfaceTest {
         a.checkEquals(0, slotCountOnDisk(dir, "t.dat", p1), "[接口] 改写第 2 页没有把第 1 页写坏");
         a.checkEquals(1, slotCountOnDisk(dir, "t.dat", p2), "[接口] 改写后的第 2 页仍是 1 行");
         a.checkEquals(0, slotCountOnDisk(dir, "t.dat", p3), "[接口] 改写第 2 页没有把第 3 页写坏");
-        a.checkEquals(9999, readIntAt(readRaw(dir, "t.dat", p2), Constants.HEADER_SIZE),
+        // 按行的实际宽度逐字节比对，而不是读一个固定 4 字节的 int：
+        // 行的编码宽度由 Serializer 决定，格式一变（NULL 标志、新类型）固定宽度就会错位。
+        byte[] expectedRow = encodeInt(9999);
+        a.check(Arrays.equals(expectedRow,
+                        Arrays.copyOfRange(readRaw(dir, "t.dat", p2), Constants.HEADER_SIZE,
+                                Constants.HEADER_SIZE + expectedRow.length)),
                 "[接口] 改写后的行内容落盘正确");
 
         // 越界与负页号：读返回 null，且不得改动页数
