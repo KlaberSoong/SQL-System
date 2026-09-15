@@ -6,7 +6,7 @@
 - **页式存储系统**：页分配/释放/读写 + LRU/FIFO 缓存
 - **数据库引擎**：执行引擎 + 存储引擎 + 系统目录（持久化）
 
-> 三个阶段均已实现：`javac` 一次编译通过，`java -cp out tests.AllTests` → **2718 条断言全部通过**（逐模块计数见第五节）。
+> 三个阶段均已实现：`javac` 一次编译通过，`java -cp out tests.AllTests` → **2860 条断言全部通过**（逐模块计数见第五节）。
 > 本文除设计取舍外，还附**各阶段验收用的预设测试程序**，以及开发中实际发生过的缺陷、抓它的回归断言和变异反查结果。
 
 ## 一、目录结构
@@ -242,19 +242,21 @@ java -cp out tests.InterfaceTest   # 或 test.bat（已并入 AllTests）
 
 ## 五、实现状态
 
-`java -cp out tests.AllTests` 当前 **2718 条断言全部通过（exit 0）**，逐模块计数：
+`java -cp out tests.AllTests` 当前 **2860 条断言全部通过（exit 0）**，逐模块计数：
 
 | 类别 | 状态 | 断言数 |
 |------|------|-------|
 | `utils/*`（枚举/常量/序列化/异常） | ✅ 完整 | — |
 | `ast/*`、`plan/*`、`Token`、`Catalog` | ✅ 完整 | — |
 | `Lexer` | ✅ 完整 | 65 |
-| `Parser` | ✅ 完整 | 57 |
-| `SemanticAnalyzer` | ✅ 完整 | 27 |
-| `Planner` / `Optimizer` | ✅ 完整 | 25 |
+| `Parser` | ✅ 完整 | 89 |
+| `SemanticAnalyzer` | ✅ 完整 | 48 |
+| `Planner` / `Optimizer` | ✅ 完整 | 35 |
 | `StorageEngine` / `Executor` | ✅ 完整 | 23 |
 | `Page`（页头 + 行/槽读写） | ✅ 完整 | 89 |
 | `BufferPool` / `FileManager` | ✅ 完整 | 2259 |
 | 接口与集成（统一接口 ↔ 上层模块） | ✅ 完整 | 134 |
+| 高级 SQL（UPDATE / ORDER BY / GROUP BY / JOIN） | ✅ 完整 | 36 |
+| NULL 与新增类型（DATE / DECIMAL / CHAR / TEXT） | ✅ 完整 | 43 |
 | 引擎 / 端到端 / 模糊 | ✅ 完整 | 20 / 15 / 4 |
 | `cli/Main`（REPL + GUI） | ✅ 完整 | — |
