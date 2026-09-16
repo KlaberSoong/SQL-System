@@ -224,7 +224,7 @@ public class BufferPool {
         this.eventSink = sink;
     }
 
-    // 注入本池的事件出口
+    // AUTO
     private void updatePolicy(int pageId) {
         if (!hasLast) {
             hasLast = true;
@@ -266,7 +266,6 @@ public class BufferPool {
         }
     }
 
-   // FIFO
     private void rebuildByInsertOrder() {
         List<Node> nodes = new ArrayList<>(cache.values());
         if (nodes.size() <= 1) {
@@ -276,7 +275,6 @@ public class BufferPool {
         relink(nodes);
     }
 
-   // LRU
     private void rebuildByRecency() {
         List<Node> nodes = new ArrayList<>(cache.values());
         if (nodes.size() <= 1) {
@@ -388,4 +386,3 @@ public class BufferPool {
         sink.accept(message);
     }
 }
-

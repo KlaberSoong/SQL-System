@@ -23,7 +23,9 @@ public class FileManager {
     }
 
     private final String filePath;
+    //有序，查询顺序，时间复杂度高
     private final Deque<Integer> freePages = new ArrayDeque<>();
+    //随机，查询存在，时间复杂度低
     private final Set<Integer> freeSet = new HashSet<>();
     private final List<WeakReference<PageChangeListener>> listeners = new ArrayList<>();
     private int pageCount;
